@@ -243,7 +243,7 @@ function drawMap() {
   const labels = [];
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  for (const [name, lon, lat, zoom, kind] of MAP_LABELS) {
+  for (const [name, lon, lat, zoom, kind] of town.labels || MAP_LABELS) {
     if (s / view.fit < zoom) continue;
     const x = sx(wx(lon)), y = sy(wy(lat));
     if (!visible(x, y, 0)) continue;
@@ -488,8 +488,8 @@ const host3d = $('world3d');
 async function setMode(next) {
   if (next === '3d' && !world3d) {
     $('view-3d').setAttribute('aria-busy', 'true');
-    loading3d ||= import('./view3d.js?v=7').then(m => m.createWorld3d({
-      host: host3d, overlay: ctx, view, town, game, play, wx, wy, truckAt, shopSign, labels: MAP_LABELS,
+    loading3d ||= import('./view3d.js?v=8').then(m => m.createWorld3d({
+      host: host3d, overlay: ctx, view, town, game, play, wx, wy, truckAt, shopSign, labels: town.labels || MAP_LABELS,
       constants: { OPEN, CLAIMED, DELIVERED, MISSED, PARKED, TRAIL, POP_TICKS, INK },
     }));
     try { world3d = await loading3d; }
@@ -520,6 +520,8 @@ async function start() {
   document.querySelector('.g-mark').innerHTML = botSvg(DEFAULT_LOOK);
   if (!code) { $('message').textContent = 'This link has no game code.'; return; }
   town = await fetch('data/game-map.json').then(res => res.json());
+  // per-town maps (tools/build-town-game-map.py) carry their own name and labels; Kongsberg's do not
+  if (town.name) { document.querySelector('.g-brand small').textContent = town.name; document.title = `Grocery Bot ${town.name} Map`; }
   origin = [(town.bounds[0] + town.bounds[2]) / 2, (town.bounds[1] + town.bounds[3]) / 2];
   squash = Math.cos(origin[1] / 1e5 * Math.PI / 180);
   buildPaths();

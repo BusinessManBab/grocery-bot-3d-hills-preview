@@ -341,6 +341,10 @@ export async function createWorld3d(opts) {
   const cellX = i => X0 + (i % wcols + .5) * WC, cellZ = i => Z0 + (Math.floor(i / wcols) + .5) * WC;
   const flowX = new Float32Array(water.length), flowZ = new Float32Array(water.length), flowSpeed = new Float32Array(water.length);
   const flowing = [];                       // cells of rivers big enough to show a current
+  // Sea and fjords (coastal towns): water within 2 m of sea level is still, and is where rivers end.
+  // Inland towns (Kongsberg's lowest point is 123 m) never have such cells.
+  const SEA = (2 - relief.base) * M * RELIEF;
+  const atSea = i => heightAt(cellX(i), cellZ(i)) < SEA;
   {
     const label = new Int32Array(water.length).fill(-1), dist = new Float32Array(water.length).fill(Infinity);
     const N4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
@@ -356,15 +360,16 @@ export async function createWorld3d(opts) {
       for (let h = 0; h < cells.length; h++) around(cells[h], j => { if (water[j] && label[j] < 0) { label[j] = comp; cells.push(j); } });
       comp++;
       if (cells.length < 120) continue;     // ponds stay still
+      const sea = cells.filter(atSea);
       const edge = cells.filter(i => { const c = i % wcols, r = (i - c) / wcols; return c === 0 || r === 0 || c === wcols - 1 || r === wrows - 1; });
       const pool = edge.length ? edge : cells;
       let low = Infinity;
       for (const i of pool) low = Math.min(low, heightAt(cellX(i), cellZ(i)));
-      const queue = pool.filter(i => heightAt(cellX(i), cellZ(i)) < low + 1.5);
+      const queue = sea.length ? sea : pool.filter(i => heightAt(cellX(i), cellZ(i)) < low + 1.5);
       for (const i of queue) dist[i] = 0;
       for (let h = 0; h < queue.length; h++) around(queue[h], j => { if (label[j] === label[queue[h]] && dist[j] === Infinity) { dist[j] = dist[queue[h]] + 1; queue.push(j); } });
       for (const i of cells) {
-        if (dist[i] === Infinity) continue;
+        if (dist[i] === Infinity || (sea.length && dist[i] === 0)) continue;   // the sea itself stays still
         const d = j => (j >= 0 && water[j] && dist[j] < Infinity ? dist[j] : dist[i]);
         const c = i % wcols;
         flowX[i] = d(c > 0 ? i - 1 : -1) - d(c < wcols - 1 ? i + 1 : -1);
