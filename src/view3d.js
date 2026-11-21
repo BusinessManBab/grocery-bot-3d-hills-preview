@@ -42,7 +42,7 @@ export async function createWorld3d(opts) {
 
   const PI = Math.PI;
   const hemi = new THREE.HemisphereLight('#fffaf0', '#d9cdb4', 1.25 * PI * .5);
-  const sun = new THREE.DirectionalLight('#fff4e0', 1.05 * PI * .5);
+  const sun = new THREE.DirectionalLight('#fff9ef', 1.05 * PI * .5);
   sun.castShadow = true;
   sun.shadow.mapSize.set(4096, 4096);
   sun.shadow.bias = -0.0004;
@@ -397,7 +397,7 @@ export async function createWorld3d(opts) {
   }
 
   // Current: short streaks drifting downstream, bright at the head and fading to the tail.
-  const STREAKS = Math.min(900, Math.round(flowing.length / 9));
+  const STREAKS = Math.min(1400, Math.round(flowing.length / 6));
   const streaks = Array.from({ length: STREAKS }, () => ({ x: 0, z: 0, age: 0, life: 1 }));
   let seedW = 11;
   const randW = () => (seedW = (seedW * 16807) % 2147483647) / 2147483647;
@@ -428,13 +428,13 @@ export async function createWorld3d(opts) {
       const speed = 13 * flowSpeed[i];
       p.x += flowX[i] * speed * dt;
       p.z += flowZ[i] * speed * dt;
-      const len = (7 + speed * .7) * scale, half = (.7 + flowSpeed[i] * .25) * scale;
+      const len = (12 + speed * 1.1) * scale, half = (.75 + flowSpeed[i] * .2) * scale;
       const fx = flowX[i], fz = flowZ[i], nx = -fz * half, nz = fx * half;
-      const tx = p.x - fx * len, tz = p.z - fz * len, a = Math.sin(Math.PI * clamp(p.age / p.life, 0, 1)) * (.45 + flowSpeed[i] * .12);
+      const tx = p.x - fx * len, tz = p.z - fz * len, a = Math.sin(Math.PI * clamp(p.age / p.life, 0, 1)) * Math.min(.9, .6 + flowSpeed[i] * .1);
       const hy = heightAt(p.x, p.z) + 1.1, ty = heightAt(tx, tz) + 1.1;
-      // a thin tapered dash: two triangles, head at full alpha, tail transparent
+      // a tapered dash with a small arrowhead: tail transparent, head bright, tip pointing downstream
       put(p.x + nx, hy, p.z + nz, a); put(p.x - nx, hy, p.z - nz, a); put(tx, ty, tz, 0);
-      put(p.x + nx * .4 + fx * half * 1.5, hy, p.z + nz * .4 + fz * half * 1.5, a); put(p.x + nx, hy, p.z + nz, a); put(p.x - nx, hy, p.z - nz, a);
+      put(p.x + nx * 2.4, hy, p.z + nz * 2.4, a); put(p.x - nx * 2.4, hy, p.z - nz * 2.4, a); put(p.x + fx * half * 4, hy, p.z + fz * half * 4, a);
       q++;
     }
     streakGeo.attributes.position.needsUpdate = true;
@@ -912,7 +912,7 @@ export async function createWorld3d(opts) {
     }
     trailGeo.setAttribute('position', new THREE.Float32BufferAttribute(trail.pos, 3));
     trailGeo.setAttribute('color', new THREE.Float32BufferAttribute(trail.col, 4));
-    if (STREAKS) flowWater(dt, clamp((distance / fitDistance) ** .6, .35, 1.5));
+    if (STREAKS) flowWater(dt, clamp((distance / fitDistance) ** .6, .55, 1.6));
 
     renderer.render(scene, camera);
 
@@ -968,5 +968,6 @@ export async function createWorld3d(opts) {
 
   resize();
   pose(home().target, fitDistance, TILT, 0);
-  return { render, setActive, flyHome: () => flyTo(home()), camera, controls, scene, renderer };
+  const flowAt = (x, z) => { const i = cellOf(x, z); return i < 0 || !flowSpeed[i] ? null : [flowX[i], flowZ[i], flowSpeed[i]]; };
+  return { render, setActive, flyHome: () => flyTo(home()), camera, controls, scene, renderer, flowAt, streaks: STREAKS };
 }
