@@ -623,7 +623,7 @@ export async function createWorld3d(opts) {
     const distance = camera.position.distanceTo(controls.target);
     // Like the 2D sprites, actors grow more slowly than the map when you zoom in. Measured per
     // object, so a truck close to a low camera does not fill the screen.
-    const growAt = (x, z) => clamp(Math.sqrt(camera.position.distanceTo(tmp.set(x, 0, z)) / fitDistance), .2, 1.25);
+    const growAt = (x, z) => clamp((camera.position.distanceTo(tmp.set(x, 0, z)) / fitDistance) ** .65, .16, 1.25);
 
     // sun follows the view so the shadow map stays sharp where you look
     const reach = clamp(distance * 1.1, 260, 2600);

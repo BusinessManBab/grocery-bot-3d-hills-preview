@@ -488,7 +488,7 @@ const host3d = $('world3d');
 async function setMode(next) {
   if (next === '3d' && !world3d) {
     $('view-3d').setAttribute('aria-busy', 'true');
-    loading3d ||= import('./view3d.js').then(m => m.createWorld3d({
+    loading3d ||= import('./view3d.js?v=4').then(m => m.createWorld3d({
       host: host3d, overlay: ctx, view, town, game, play, wx, wy, truckAt, shopSign, labels: MAP_LABELS,
       constants: { OPEN, CLAIMED, DELIVERED, MISSED, PARKED, TRAIL, POP_TICKS, INK },
     }));
