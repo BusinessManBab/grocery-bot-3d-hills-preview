@@ -1,6 +1,7 @@
 // Preview build of the live /game/CODE page (prototypes/town-rush/game-view.js) with a 3D view added.
 import { MAP_LABELS } from './game-map-labels.js';
 import { COLORS, DEFAULT_LOOK, botSvg, cleanLook, truckSvg } from './looks.js';
+import { createPanels } from './panels.js?v=9';
 
 const $ = id => document.getElementById(id);
 const code = 'PREVIEW';
@@ -18,7 +19,7 @@ const smooth = (a, b, v) => { const t = clamp((v - a) / (b - a), 0, 1); return t
 const game = { meta: null, frames: [], activeOrders: new Map(), orderFrame: -1, finished: false, players: [] };
 const play = { head: 0, speed: 4, paused: false, following: false, focus: null };
 const view = { scale: 1, x: 0, y: 0, fit: 1, w: 0, h: 0, dpr: 1, touched: false };
-let mapKey = '', hudTick = '';
+let mapKey = '', hudTick = '', panels = null, picks = [];
 let town = null, paths = null, origin = [0, 0], squash = 1, lastBoardTick = -1, pointers = new Map();
 
 const wx = lon => (lon - origin[0]) * squash;
@@ -87,6 +88,8 @@ async function load() {
   game.finished = body.finished;
   if (first) {
     $('message').hidden = true;
+    // shop window + order card; `meta.you` is the viewer's seat (in the live game: the signed-in player's)
+    createPanels({ game, play, you: Number.isInteger(game.meta.you) ? game.meta.you : null }).then(made => { panels = made; }).catch(error => console.error(error));
     play.following = !game.finished;
     play.head = game.finished ? 0 : Math.max(0, latest() - 1);
     if (!game.finished) play.speed = 1;
@@ -146,10 +149,11 @@ function zoomAt(px, py, factor) {
 }
 
 canvas.addEventListener('wheel', event => { event.preventDefault(); zoomAt(event.offsetX, event.offsetY, Math.exp(-event.deltaY * (event.ctrlKey ? .01 : .0016))); }, { passive: false });
-canvas.addEventListener('pointerdown', event => { canvas.setPointerCapture(event.pointerId); pointers.set(event.pointerId, [event.offsetX, event.offsetY]); canvas.classList.add('is-dragging'); });
+let tap = null;
+canvas.addEventListener('pointerdown', event => { canvas.setPointerCapture(event.pointerId); pointers.set(event.pointerId, [event.offsetX, event.offsetY]); canvas.classList.add('is-dragging'); tap = pointers.size === 1 ? { x: event.offsetX, y: event.offsetY, t: performance.now() } : null; });
 canvas.addEventListener('pointermove', event => {
   const before = pointers.get(event.pointerId);
-  if (!before) return;
+  if (!before) { canvas.style.cursor = pickAt(event.offsetX, event.offsetY) ? 'pointer' : ''; return; }
   const now = [event.offsetX, event.offsetY];
   if (pointers.size === 2) {
     const other = [...pointers.entries()].find(([id]) => id !== event.pointerId)[1];
@@ -162,7 +166,32 @@ canvas.addEventListener('pointermove', event => {
   }
   pointers.set(event.pointerId, now);
 });
-for (const type of ['pointerup', 'pointercancel']) canvas.addEventListener(type, event => { pointers.delete(event.pointerId); if (!pointers.size) canvas.classList.remove('is-dragging'); });
+for (const type of ['pointerup', 'pointercancel']) canvas.addEventListener(type, event => {
+  if (type === 'pointerup' && tap && pointers.size === 1 && Math.hypot(event.offsetX - tap.x, event.offsetY - tap.y) < 6 && performance.now() - tap.t < 500) choose(event.offsetX, event.offsetY);
+  tap = null;
+  pointers.delete(event.pointerId);
+  if (!pointers.size) canvas.classList.remove('is-dragging');
+});
+
+// Clicking on the map: an order house opens the order card, a shop opens that shop's window.
+// `picks` holds this frame's clickable things in screen pixels, from the 2D or the 3D drawing.
+function pickAt(x, y) {
+  const list = mode === '3d' && world3d ? world3d.picks : picks;
+  let best = null, score = Infinity;
+  for (const p of list) {
+    const d = Math.hypot(x - p.x, y - p.y) / p.r;
+    if (d > 1) continue;
+    const s = d + (p.kind === 'shop' ? .5 : 0);      // small orders win over the big shop next to them
+    if (s < score) { score = s; best = p; }
+  }
+  return best;
+}
+function choose(x, y) {
+  const hit = pickAt(x, y);
+  if (!hit || !panels) return;
+  if (hit.kind === 'order') panels.showOrder(hit.id);
+  else panels.showShop(hit.seat);
+}
 canvas.addEventListener('dblclick', fit);
 
 function seekTo(tick) {
@@ -274,6 +303,15 @@ function drawOrders(tick) {
       if (owner) pops.push({ x, y, age: age / POP_TICKS, text: `+${now.points}`, colour: owner.colour, dim });
       continue;
     }
+    picks.push({ kind: 'order', id, x, y, r: 12 });
+    if (panels?.selectedOrder === id) {
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(x, y, 9 + Math.sin(performance.now() / 180) * 1.5, 0, 7);
+      ctx.stroke();
+    }
     ctx.globalAlpha = dim;
     ctx.fillStyle = owner?.colour || '#fff5da';
     ctx.strokeStyle = owner ? '#fff' : '#735536';
@@ -353,6 +391,7 @@ function truckImage(player, x, y, size, facing, alpha) {
 }
 
 function shop(player, x, y, alpha, parked) {
+  picks.push({ kind: 'shop', seat: player.seat, x, y: y - 10, r: 36 });
   ctx.globalAlpha = alpha;
   ctx.fillStyle = '#583a2d';
   ctx.fillRect(x - 31, y - 24, 62, 34);
@@ -459,6 +498,7 @@ function frame(now) {
   const a = game.frames[index], b = game.frames[Math.min(index + 1, game.frames.length - 1)];
   ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
   ctx.clearRect(0, 0, view.w, view.h);
+  picks = [];
   const dark = darkness(a.c + (b.c - a.c) * k);
   advanceOrders(index);
   if (mode === '3d' && world3d) {
@@ -479,6 +519,7 @@ function frame(now) {
     hud(a, b, k);
   }
   if (index !== lastBoardTick) { lastBoardTick = index; board(a); }
+  panels?.update(index, k, a, play.head, now / 1000);
 }
 
 // ---- 2D / 3D switch -------------------------------------------------------
@@ -488,9 +529,10 @@ const host3d = $('world3d');
 async function setMode(next) {
   if (next === '3d' && !world3d) {
     $('view-3d').setAttribute('aria-busy', 'true');
-    loading3d ||= import('./view3d.js?v=8').then(m => m.createWorld3d({
+    loading3d ||= import('./view3d.js?v=9').then(m => m.createWorld3d({
       host: host3d, overlay: ctx, view, town, game, play, wx, wy, truckAt, shopSign, labels: town.labels || MAP_LABELS,
       constants: { OPEN, CLAIMED, DELIVERED, MISSED, PARKED, TRAIL, POP_TICKS, INK },
+      selected: () => panels?.selectedOrder ?? null, onTap: choose, hover: pickAt,
     }));
     try { world3d = await loading3d; }
     catch (error) { console.error(error); $('message').hidden = false; $('message').textContent = 'The 3D view could not start in this browser.'; setTimeout(() => { $('message').hidden = true; }, 3000); next = '2d'; }
@@ -514,7 +556,7 @@ addEventListener('keydown', event => {
   if (event.target.closest?.('input, textarea')) return;
   if (event.key === 'v' || event.key === 'V') setMode(mode === '3d' ? '2d' : '3d');
 });
-window.groceryView = { setMode, play, game, toWorld: (lon, lat) => [wx(lon), wy(lat)], get world3d() { return world3d; } };
+window.groceryView = { setMode, play, game, toWorld: (lon, lat) => [wx(lon), wy(lat)], get picks() { return mode === '3d' && world3d ? world3d.picks : picks; }, get panels() { return panels; }, get world3d() { return world3d; } };
 
 async function start() {
   document.querySelector('.g-mark').innerHTML = botSvg(DEFAULT_LOOK);

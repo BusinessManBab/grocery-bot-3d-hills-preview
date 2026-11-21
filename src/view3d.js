@@ -22,6 +22,7 @@ const ease = t => t < .5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
 
 export async function createWorld3d(opts) {
   const { host, overlay: ctx, view, town, game, play, wx, wy, truckAt, labels } = opts;
+  let picks = [];                           // this frame's clickable shops and order houses, in screen pixels
   const { OPEN, DELIVERED, PARKED, TRAIL, POP_TICKS, INK } = opts.constants;
   const [extra, relief, heights] = await Promise.all([
     fetch('data/buildings.json').then(res => res.json()),
@@ -309,7 +310,8 @@ export async function createWorld3d(opts) {
     home.wall.color.set(fade(open ? PALETTE.open : mix(colour, '#ffffff', .25)));
     home.roof.color.set(fade(open ? PALETTE.openEdge : colour));
     home.ring.material.color.set(open ? PALETTE.openEdge : colour);
-    home.ring.material.opacity = (open ? .28 : .45) * s.dim;
+    home.ringBase = (open ? .28 : .45) * s.dim;
+    home.ring.material.opacity = home.ringBase;
     home.ring.visible = true;
     home.pin.material.map = open ? pinTexture(PALETTE.open, PALETTE.openEdge) : pinTexture(colour, '#ffffff');
     home.pin.material.opacity = s.dim;
@@ -780,6 +782,16 @@ export async function createWorld3d(opts) {
   }
 
   renderer.domElement.addEventListener('dblclick', () => flyTo(home()));
+  {
+    let down = null;
+    const el = renderer.domElement;
+    el.addEventListener('pointerdown', event => { down = event.isPrimary ? { x: event.offsetX, y: event.offsetY, t: performance.now() } : null; });
+    el.addEventListener('pointerup', event => {
+      if (down && event.isPrimary && Math.hypot(event.offsetX - down.x, event.offsetY - down.y) < 6 && performance.now() - down.t < 500) opts.onTap?.(event.offsetX, event.offsetY);
+      down = null;
+    });
+    el.addEventListener('pointermove', event => { if (!event.buttons) el.style.cursor = opts.hover?.(event.offsetX, event.offsetY) ? 'pointer' : ''; });
+  }
   addEventListener('resize', () => { if (active) resize(); });
 
   let active = false, entered = false;
@@ -852,15 +864,22 @@ export async function createWorld3d(opts) {
         continue;
       }
       const was = states.get(house);
-      if (!was || was.status === OPEN) states.set(house, { status: order.status, owner, dim });
+      if (!was || was.status === OPEN) states.set(house, { status: order.status, owner, dim, id });
     }
     const pinH = 24 / size.h * 2 * Math.tan(camera.fov * Math.PI / 360);  // a 24 px pin at any screen size
+    const chosen = opts.selected?.() ?? null;
+    picks = [];
     for (const house of homes) {
       const s = states.get(house);
       paintHome(house, s);
       if (s) {
+        const big = s.id === chosen ? 1.5 : 1;
         house.pin.position.set(house.x, house.top + 6 + Math.sin(time * 2.4 + house.i) * 1.5, house.z);
-        house.pin.scale.set(pinH * 2 / 3, pinH, 1);
+        house.pin.scale.set(pinH * 2 / 3 * big, pinH * big, 1);
+        house.ring.material.opacity = s.id === chosen ? .45 + Math.sin(time * 5) * .2 : house.ringBase;
+        const pin = project(house.x, house.top + 6, house.z), roof = project(house.x, house.top, house.z);
+        if (pin) picks.push({ kind: 'order', id: s.id, x: pin.x, y: pin.y - 14 * big, r: 16 * big });
+        if (roof) picks.push({ kind: 'order', id: s.id, x: roof.x, y: roof.y, r: 14 });
       }
     }
 
@@ -879,6 +898,8 @@ export async function createWorld3d(opts) {
         const sx = player.shop[0], sz = player.shop[1], hw = 31 * SHOP_SCALE * actor.grow, hd = 18 * SHOP_SCALE * actor.grow;
         actor.base = Math.max(heightAt(sx, sz), heightAt(sx - hw, sz - hd), heightAt(sx + hw, sz - hd), heightAt(sx - hw, sz + hd), heightAt(sx + hw, sz + hd));
         actor.shop.group.position.y = actor.base;
+        const S = SHOP_SCALE * actor.grow, mid = project(sx, actor.base + 22 * S, sz), side = project(sx + 31 * S, actor.base + 22 * S, sz);
+        if (mid) picks.push({ kind: 'shop', seat: player.seat, x: mid.x, y: mid.y, r: Math.max(22, side ? Math.hypot(side.x - mid.x, side.y - mid.y) * 1.25 : 30) });
       }
       let parked = 0;
       const colour = new THREE.Color(player.colour);
@@ -974,5 +995,5 @@ export async function createWorld3d(opts) {
   resize();
   pose(home().target, fitDistance, TILT, 0);
   const flowAt = (x, z) => { const i = cellOf(x, z); return i < 0 || !flowSpeed[i] ? null : [flowX[i], flowZ[i], flowSpeed[i]]; };
-  return { render, setActive, flyHome: () => flyTo(home()), camera, controls, scene, renderer, flowAt, streaks: STREAKS };
+  return { render, setActive, flyHome: () => flyTo(home()), camera, controls, scene, renderer, flowAt, streaks: STREAKS, get picks() { return picks; } };
 }
