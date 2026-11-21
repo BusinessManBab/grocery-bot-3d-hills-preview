@@ -10,6 +10,7 @@
 // Everything is written into a handful of merged buffers (one per facade style plus one for
 // roofs and trim), so the whole town is ~5 draw calls however many buildings it has.
 import * as THREE from 'three';
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const STYLE_OF = {
   house: 'house', detached: 'house', semidetached_house: 'house', terrace: 'house', bungalow: 'house', cabin: 'house', farm: 'house',
@@ -127,7 +128,7 @@ export function createBuildings({ heightAt, wx, wy, M, LIFT }) {
     const wallHex = tone(pick(pal.walls, r), wallTag), roofHex = tone(pick(pal.roofs, r >>> 5), roofColTag);
     let lo = Infinity, hi = -Infinity;
     for (const p of pts) { const y = heightAt(p.x, p.y); lo = Math.min(lo, y); hi = Math.max(hi, y); }
-    const foot = lo - 1.5;
+    const foot = lo - 1.5, tiny = areaM < 30;
 
     // oriented rectangle along the longest edge, to decide on and lay out a pitched roof
     let best = 0, dir = new THREE.Vector2(1, 0);
@@ -179,8 +180,8 @@ export function createBuildings({ heightAt, wx, wy, M, LIFT }) {
       }
       // chunky fascia under the eaves (the cartoon "thick roof" edge)
       const f = .3 * M;
-      quad(trim, [E1, E2, [E2[0], ea - f, E2[2]], [E1[0], ea - f, E1[2]]], dark);
-      quad(trim, [E3, E4, [E4[0], ea - f, E4[2]], [E3[0], ea - f, E3[2]]], dark);
+      if (!tiny) quad(trim, [E1, E2, [E2[0], ea - f, E2[2]], [E1[0], ea - f, E1[2]]], dark);
+      if (!tiny) quad(trim, [E3, E4, [E4[0], ea - f, E4[2]], [E3[0], ea - f, E3[2]]], dark);
       // chimney on most houses
       if ((style === 'house') && r % 5 !== 1 && (s1 - s0) > 5 * M) {
         const cs = s0 + (s1 - s0) * (.25 + (r % 3) * .12), ct = tm + half * .45, yRoof = ridge - rise * .45;
@@ -200,7 +201,7 @@ export function createBuildings({ heightAt, wx, wy, M, LIFT }) {
       // flat roof: cap, a parapet rim and (on big blocks) a rooftop box
       for (const [i, j, k] of THREE.ShapeUtils.triangulateShape(pts, [])) tri(roofB, [[pts[i].x, top, pts[i].y], [pts[k].x, top, pts[k].y], [pts[j].x, top, pts[j].y]], rc);
       const pc = rgb('#' + new THREE.Color(wallHex).multiplyScalar(.86).getHexString()), ph = top + .55 * M;
-      for (let i = 0; i < pts.length; i++) { const a = pts[i], b = pts[(i + 1) % pts.length]; quad(trim, [[a.x, top, a.y], [b.x, top, b.y], [b.x, ph, b.y], [a.x, ph, a.y]], pc); }
+      if (!tiny) for (let i = 0; i < pts.length; i++) { const a = pts[i], b = pts[(i + 1) % pts.length]; quad(trim, [[a.x, top, a.y], [b.x, top, b.y], [b.x, ph, b.y], [a.x, ph, a.y]], pc); }
       if (areaM > 380) {
         const c = pts.reduce((m, p) => m.add(p), new THREE.Vector2()).divideScalar(pts.length);
         const w = Math.min(t1 - t0, 9 * M) * .35, d = Math.min(s1 - s0, 12 * M) * .3;
@@ -210,7 +211,7 @@ export function createBuildings({ heightAt, wx, wy, M, LIFT }) {
     }
 
     // a front door on houses, in the middle of the longest wall, facing out
-    if (style === 'house' || style === 'church' || (style === 'apt' && r % 2 === 0)) {
+    if (!tiny && (style === 'house' || style === 'church' || (style === 'apt' && r % 2 === 0))) {
       let k = 0, len = 0;
       for (let i = 0; i < pts.length; i++) { const l = pts[i].distanceTo(pts[(i + 1) % pts.length]); if (l > len) { len = l; k = i; } }
       const a = pts[k], b = pts[(k + 1) % pts.length], m = a.clone().add(b).multiplyScalar(.5), e = b.clone().sub(a).normalize();
@@ -232,8 +233,9 @@ export function createBuildings({ heightAt, wx, wy, M, LIFT }) {
     geo.setAttribute('uv', new THREE.Float32BufferAttribute(parts.flatMap(b => b.uv), 2));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(parts.flatMap(b => b.col), 3));
     geo.computeVertexNormals();
-    if (parts.length > 1) { let start = 0; parts.forEach((b, i) => { geo.addGroup(start, b.pos.length / 3, i); start += b.pos.length / 3; }); }
-    return geo;
+    if (parts.length > 1) { let start = 0; parts.forEach((b, i) => { geo.addGroup(start, b.pos.length / 3, i); start += b.pos.length / 3; }); return geo; }
+    // flat faces: the corners two triangles share become one vertex (indexed), about a third fewer
+    return mergeVertices(geo, 1e-4);
   }
 
   return { build, geometry, textures, bucket };

@@ -7,7 +7,7 @@ import { MapControls } from 'three/addons/controls/MapControls.js';
 import { SVGLoader } from 'three/addons/loaders/SVGLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { forestPath } from './forest.js';
-import { createBuildings } from './buildings3d.js?v=15';
+import { createBuildings } from './buildings3d.js?v=16';
 import { COLORS, HEADS, INK as TRUCK_INK, SHELL, EDGE, WOOD, LAMP, mix, light, face } from './looks.js';
 
 const M = 1 / 1.113;              // world units per metre (one unit is 1e-5 degree of latitude)
