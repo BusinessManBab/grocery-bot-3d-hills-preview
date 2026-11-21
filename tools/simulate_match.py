@@ -39,48 +39,46 @@ LOOKS = {
 # ids sort into seat (and shop) order
 SEATS = [('p1', 'Kale Storm', ReferenceBot), ('p2', 'Oat Runner', StarterBot), ('p3', 'Rush AI', 'rush'),
          ('p4', 'Cheddar Dash', ReferenceBot), ('p5', 'Plum Pusher', StarterBot)]
-# A realistic shop: products grouped in departments with the right fixtures, instead of the
-# engine's round-robin (milk next to bread next to apples). Dairy and drinks in the fridges at the
-# back (left, far from the robots' door at the bottom right), dry goods in the middle aisle, the
-# bakery, fruit and vegetables near the door. Same shelf cells as the engine's shop, so walking
-# distances stay comparable; one cell per product at least, milk/juice/bread twice or more.
-# Blocks: shelf column x, upper (y 3-5) or lower (y 7-8). (department, fixture, products)
-LAYOUT = {
-    (3, 'upper'): ('Dairy', 'fridge', ['milk', 'milk', 'yogurt']),
-    (3, 'lower'): ('Dairy', 'fridge', ['cream', 'butter']),
-    (7, 'upper'): ('Dairy', 'fridge', ['cheese', 'eggs', 'milk']),
-    (7, 'lower'): ('Drinks', 'fridge', ['juice', 'juice']),
-    (11, 'upper'): ('Pantry', 'shelf', ['pasta', 'rice', 'sugar']),
-    (11, 'lower'): ('Breakfast', 'shelf', ['cereal', 'oats']),
-    (15, 'upper'): ('Bakery', 'rack', ['bread', 'bread', 'flour']),
-    (15, 'lower'): ('Vegetables', 'bin', ['carrots', 'onions']),
-    (19, 'upper'): ('Fruit', 'bin', ['apples', 'bananas', 'tomatoes']),
-    (19, 'lower'): ('Vegetables', 'bin', ['peppers', 'lettuce']),
-}
+# A realistic shop laid out like the v1 grocerybot.no store: four departments from the back wall
+# to the robots' door - DAIRY (fridges), PANTRY (shelves), PRODUCE (bins), BAKERY (bread racks) -
+# each a double row of fixtures back to back around a spine, running the shop's depth with one
+# cross aisle and two-tile aisles between departments. The engine's round-robin shelves are replaced; grid, truck bays, loading cells and
+# the robots' start cell stay the engine's, and every shelf is reachable from an aisle.
+# (department, fixture, left shelf column x, products in order; the spine is x + 1, the right column x + 2)
+DEPARTMENTS = [
+    ('Dairy', 'fridge', 2, ['milk', 'yogurt', 'cream', 'butter', 'cheese', 'eggs', 'juice']),
+    ('Pantry', 'shelf', 7, ['pasta', 'rice', 'flour', 'sugar', 'oats', 'cereal']),
+    ('Produce', 'bin', 12, ['apples', 'bananas', 'tomatoes', 'carrots', 'onions', 'peppers', 'lettuce']),
+    ('Bakery', 'rack', 17, ['bread']),
+]
+ROWS = [3, 4, 5, 7, 8, 9]          # y 6 is the cross aisle; y 1-2 stay free for the loading bays
 _engine_make_shop = simulation.make_shop
 
 
 def realistic_shop(rules):
     shop = _engine_make_shop(rules)
-    middle = shop['grid']['height'] // 2
-    blocks = {}
-    for item in shop['items']:
-        x, y = item['position']
-        blocks.setdefault((x, 'upper' if y < middle else 'lower'), []).append(item)
-    departments, fixtures = [], {}
-    for key, cells in blocks.items():
-        if key not in LAYOUT:
-            raise SystemExit(f'shop layout has no department for shelf block {key}; update LAYOUT')
-        name, fixture, products = LAYOUT[key]
-        cells.sort(key=lambda i: i['position'][1])
-        wanted = [p for p in products if p in rules['products']] or rules['products'][:1]
-        for n, item in enumerate(cells):
-            item['type'] = wanted[n % len(wanted)]
-            fixtures[f"{item['position'][0]},{item['position'][1]}"] = fixture
-        departments.append({'name': name, 'x': cells[0]['position'][0], 'y': cells[0]['position'][1], 'fixture': fixture})
-    missing = set(rules['products']) - {i['type'] for i in shop['items']}
+    w, h = shop['grid']['width'], shop['grid']['height']
+    if (w, h) != (23, 12):
+        raise SystemExit(f'DEPARTMENTS is drawn for the 23 x 12 shop (5 trucks), not {w} x {h}; update it')
+    walls = [cell for cell in shop['grid']['walls']]
+    items, departments, fixtures = [], [], {}
+    for name, fixture, x, products in DEPARTMENTS:
+        wanted = [p for p in products if p in rules['products']]
+        if not wanted:
+            continue
+        cells = [(x, y) for y in ROWS] + [(x + 2, y) for y in ROWS]          # left column, then right
+        # same products next to each other: each product gets a run of cells, the first ones one more
+        counts = [len(cells) // len(wanted) + (1 if i < len(cells) % len(wanted) else 0) for i in range(len(wanted))]
+        run = [p for p, n in zip(wanted, counts) for _ in range(n)]
+        for (cx, cy), product in zip(cells, run):
+            items.append({'id': f'item_{len(items)}', 'type': product, 'position': [cx, cy]})
+            fixtures[f'{cx},{cy}'] = fixture
+        walls += [[x + 1, y] for y in ROWS]                                 # the spine between the rows
+        departments.append({'name': name, 'x': x, 'y': ROWS[0], 'fixture': fixture})
+    missing = set(rules['products']) - {i['type'] for i in items}
     if missing:
-        raise SystemExit(f'products without a shelf: {sorted(missing)}; update LAYOUT')
+        raise SystemExit(f'products without a shelf: {sorted(missing)}; add them to DEPARTMENTS')
+    shop['grid']['walls'], shop['items'] = walls, items
     shop['departments'], shop['fixtures'] = departments, fixtures
     return shop
 

@@ -3,7 +3,7 @@
 // homepage's own canned replay. Same isometric store, shelves, fridges, produce bins, bread racks,
 // Grocery Bots with their baskets, and trucks backing into the bays; the bots wear the player's
 // look and the trucks are the player's own trucks, the same ones that drive on the map.
-import { HEADS, WOOD, cleanLook, mix as mixHex, truckArt } from './looks.js';
+import { COLORS as COLORS_LOOK, HEADS, WOOD, cleanLook, mix as mixHex, truckArt } from './looks.js';
 
 const NS = 'http://www.w3.org/2000/svg';
 const A = 24, B = 12, SHELF = 21, WALL = 30, SLAB = 9, EDGE = .72;
@@ -139,6 +139,7 @@ export function createIsoShop(svg, layout) {
   }
 
   const WALL_TONE = ['#f7f5f3', '#e2dcd7', '#d6cfc9'];
+  const SPINE_TONE = ['#ece7e3', '#e6e0db', '#d4ccc5'];
   const SIGN = 3.6, signY = (1 + Y) / 2 + SIGN / 2;
   const trim = y => y < Math.floor(signY - SIGN) || y > Math.floor(signY);
   for (let y = 0; y < Y; y++) {
@@ -153,8 +154,9 @@ export function createIsoShop(svg, layout) {
           if (y === 0) poly([P(x, 1, WALL - 5), P(x + 1, 1, WALL - 5), P(x + 1, 1, WALL - 8), P(x, 1, WALL - 8)], '#c8102e', layer);
         }
       } else {
-        const type = shelves[x + ',' + y], kind = fixtures[x + ',' + y] || 'shelf', fixture = FIXTURES[kind];
-        const g = box(x, y, fixture.height, fixture.tone, layer);
+        const type = shelves[x + ',' + y];
+        const kind = fixtures[x + ',' + y] || fixtures[(x - 1) + ',' + y] || fixtures[(x + 1) + ',' + y] || 'shelf', fixture = FIXTURES[kind];
+        const g = box(x, y, fixture.height, type ? fixture.tone : SPINE_TONE, layer);
         if (type) goods(g, x, y, type, kind, fixture.height);
       }
     }
@@ -166,7 +168,8 @@ export function createIsoShop(svg, layout) {
     const above = departments.find(o => o.x === department.x && o.y < department.y && o.name === department.name);
     if (above) return;
     const h = (FIXTURES[department.fixture] || FIXTURES.shelf).height;
-    const [sx, sy] = P(department.x + .5, department.y + .5, h + 14);
+    const wide = shelves[(department.x + 2) + ',' + department.y] !== undefined;       // a double row: centre over all three cells
+    const [sx, sy] = P(department.x + (wide ? 1.5 : .5), department.y + .5, h + 14);
     const u = Math.hypot(A, B), w = department.name.length * 6 + 12;
     const label = el('g', { transform: `matrix(${A / u} ${B / u} 0 1 ${sx} ${sy})`, 'aria-label': department.name }, layers[W + H]);
     el('rect', { x: -w / 2, y: -12, width: w, height: 15, rx: 1, fill: '#c8102e' }, label);
@@ -209,6 +212,8 @@ export function createIsoShop(svg, layout) {
   // The player's own truck (looks.js truckArt, the art the map trucks use) painted on the truck's
   // visible side, plus roof faces and the open rear door with the loaded goods from arena.js.
   // Side art: svg x -74 (rear) .. 70 (cab) runs along u = 0 .. -3.1 cells; svg y 38 is the ground.
+  // flat parts of each cab's roof in svg x (from looks.js HEADS): [x from, x to, svg y]
+  const CAB_ROOFS = { flat: [[24, 56, -38]], high: [[24, 54, -50]], nose: [[24, 41, -38], [53, 68, -11]], slant: [[24, 38, -38]] };
   const ART_U = -3.1 / 144, ART_U0 = -74 * 3.1 / 144, ART_Z = .344;
   const artU = x => ART_U * x + ART_U0, artZ = y => (38 - y) * ART_Z;
   function truckMarkup(dock, s) {
@@ -221,9 +226,19 @@ export function createIsoShop(svg, layout) {
     out += `<g transform="translate(0 ${-(s.bounce || 0)})">`;
     // roof faces first (they sit behind the side art's top edge)
     const roof = (u0, u1, z, fill) => { out += `<polygon points="${pts([P(x0, u0, z), P(x1, u0, z), P(x1, u1, z), P(x0, u1, z)])}" fill="${fill}"/>`; };
-    if (truckLook.carriage === 'flatbed') roof(artU(14), artU(-72), artZ(4), WOOD);
-    else roof(artU(14), artU(-72), artZ(truckLook.carriage === 'canvas' ? -50 : -52), truckLook.carriage === 'canvas' ? mixHex(paint, '#ffffff', .78) : '#fbfaf8');
-    roof(artU(60), artU(20), artZ(truckHead.top), shade(paint, .14));
+    const roofIn = (x0in, x1in, u0, u1, z, fill) => { out += `<polygon points="${pts([P(x0 + x0in, u0, z), P(x1 - x1in, u0, z), P(x1 - x1in, u1, z), P(x0 + x0in, u1, z)])}" fill="${fill}"/>`; };
+    if (truckLook.carriage === 'flatbed') {
+      roof(artU(14), artU(-72), artZ(4), WOOD);
+      // the crates' tops, lowest first, so taller crates sit on top (same crates as looks.js)
+      for (const [x, y, w, c] of [[-14, -8, 18, COLORS_LOOK.carrot], [-64, -22, 22, COLORS_LOOK.oat], [-40, -16, 24, COLORS_LOOK.leaf], [-60, -40, 16, COLORS_LOOK.lemon]].sort((a, b) => b[1] - a[1]))
+        roofIn(.12, .12, artU(x + w), artU(x), artZ(y), c);
+    } else {
+      roof(artU(14), artU(-72), artZ(truckLook.carriage === 'canvas' ? -50 : -52), truckLook.carriage === 'canvas' ? mixHex(paint, '#ffffff', .78) : '#fbfaf8');
+      if (truckLook.carriage === 'cooler') roofIn(.2, .2, artU(-6), artU(-34), artZ(-61), '#d6cfc8');
+    }
+    const cab = shade(paint, .14);
+    for (const [xa, xb, y] of CAB_ROOFS[truckLook.head] || CAB_ROOFS.flat) roof(artU(xb), artU(xa), artZ(y), cab);
+    if (truckLook.visor === 'lights') roofIn(.15, .15, artU(truckHead.roof + 13), artU(truckHead.roof - 13), artZ(truckHead.top - 6), '#2b2522');
     out += `<g transform="matrix(${-A} ${B} 0 1 ${x1 * A} ${x1 * B})"><g transform="matrix(${ART_U} 0 0 ${ART_Z} ${ART_U0} ${-38 * ART_Z})">${truckSide}</g></g>`;
     // rear: the door rolls up while docked and shows what robots have loaded
     out += `<g transform="matrix(${A} ${B} 0 1 ${-r * A} ${r * B})">`;
