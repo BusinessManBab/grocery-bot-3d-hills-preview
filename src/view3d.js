@@ -165,9 +165,15 @@ export async function createWorld3d(opts) {
   }
 
   // Context town: every other mapped building in the bounds, pale so the order homes stand out.
+  // Buildings under a shop (often the real store) make way for the shop model, as on the 2D map.
+  const PLAZA = 100;
+  const nearShop = (x, z, r = PLAZA) => game.players.some(p => Math.hypot(p.shop[0] - x, p.shop[1] - z) < r);
   {
     const parts = { walls: [], roof: [] };
     for (const b of extra.buildings) {
+      let hit = false;
+      for (let i = 1; i < b.length && !hit; i += 2) hit = nearShop(wx(b[i]), wy(b[i + 1]));
+      if (hit) continue;
       const h = b[0] * M * LIFT;
       prism(b.slice(1), h, parts);
     }
@@ -309,6 +315,7 @@ export async function createWorld3d(opts) {
       }
     }
     for (const b of extra.buildings) mark(wx(b[1]), wy(b[2]), 10);
+    for (const p of game.players) mark(p.shop[0], p.shop[1], PLAZA + 10);
     return (x, z) => grid[Math.floor((z - Z0) / cell) * cols + Math.floor((x - X0) / cell)] === 1;
   }
 
