@@ -8,7 +8,9 @@ contains. Nothing in the page code is specific to Kongsberg: everything town-spe
 
 **What's on the map:**
 - terrain from real elevation data (see Steps 4 and "Settings");
-- real buildings, with each order's house highlighted (Step 3);
+- real buildings in a **cartoon style that follows what each building really is** (house,
+  apartments, shop, industrial, garage, church), with each order's house highlighted (Step 3 and
+  "Cartoon buildings");
 - **forests on empty land and mapped woodland, with green under them on the 2D map**
   (Step 4b and "Forests");
 - bridges over the water ("Bridges");
@@ -18,6 +20,19 @@ contains. Nothing in the page code is specific to Kongsberg: everything town-spe
 Agreed but not built yet: see "Planned changes".
 
 **Updates:**
+- **2026-11-21, cartoon buildings:** every building, order homes included, is styled from its OSM
+  type:
+  - houses get steep pitched roofs (gabled or hipped) with thick eaves, a chimney, a front door
+    and framed windows on wooden cladding;
+  - apartment blocks get window rows with balconies, a flat roof with a rim and a rooftop box;
+  - shops and offices get big shop windows and a sign band;
+  - industrial buildings get corrugated walls;
+  - garages and sheds get garage doors and low roofs;
+  - the church gets a tower and spire.
+
+  The town totals 624k vertices and about 5 draw calls, and runs at the same 58–60 fps as
+  before. Method in "Cartoon buildings". The buildings data step now also writes each building's
+  OSM type and roof/colour tags.
 - **2026-11-21, trees:** about 18,300 forest trees (spruce and birch) on OSM forest and woodland,
   and on empty land more than ~35 m from buildings. Fields, built-up land, parks, roads and water
   stay clear. Green is painted under every tree on the 2D map and the 3D ground, so wooded areas
@@ -37,7 +52,7 @@ yet, because there is no Oslo replay (see step 2).
 |---|---|---|
 | `game-map.json` | The town's flat map: bounds, roads, water, green areas, delivery homes, labels | The game repo's town pipeline (step 1) |
 | `game.json` | One finished game played **on that same map** | The game server's `/api/games/CODE?since=0` (step 2) |
-| `buildings.json` | OSM building footprints, with each delivery home matched to its real building | `tools/build_city.py buildings` |
+| `buildings.json` | OSM building footprints, with each delivery home matched to its real building, plus each building's OSM type, `roof:shape`, `building:colour` and `roof:colour` (for the cartoon style) | `tools/build_city.py buildings` |
 | `terrain.bin` + `terrain.json` | Elevation grid over the map bounds | `tools/build_city.py terrain` |
 | `landcover.json` | OSM forest and woodland (trees go here) and fields, meadows and built-up land (no trees). Optional: without it there is no forest | `tools/build_city.py landcover` |
 | `shop.json` + `shop.bin` | Inside the shops: robot positions, what they carry, truck loading; every order's items, address and timeline. Optional: without them the page simply has no shop window or order card | The full engine replay of the same game (see "Shop window and order card") |
@@ -183,6 +198,8 @@ Things to check (see the next section for what to change):
 - [ ] In the shop window, robots carry and load items, trucks back in and drive off, and truck
       tags fill up as the replay plays
 - [ ] Roads cross rivers on raised bridges with railings, and the road surface shows on the deck
+- [ ] Buildings look like what they are (pitched-roof houses with chimneys and doors, apartment
+      blocks with balconies, flat-roofed shops and sheds, church with a spire), and 3D fps is unchanged
 - [ ] The empty hillsides around town are forest in 3D, with green under them on the 2D map
       (and on the 3D ground). Fields, town, parks, roads and water have no forest trees
 - [ ] Clicking an order house opens the order card with the right items, times and happiness
@@ -288,39 +305,9 @@ showing rivals' robots, claims and items live would leak strategy.
 These are agreed requirements for the next version of the map. None of them is live on the
 preview yet. Each lists what it should do, how to build it, and how to check it.
 
-### 1. Buildings with real-world detail, without making the 3D view lag
+### 1. Buildings with real-world detail, without making the 3D view lag: done
 
-**Goal:** buildings should look like real buildings (roof shapes, windows, varied colours),
-like the town in real life. Detail must never cost smoothness: the 3D view has to stay at about
-60 fps on an ordinary laptop with the whole town in view.
-
-**How:**
-- **Roofs:** small houses (OSM `house`, `detached`, `semidetached_house`, `terrace`, or any building
-  up to about 2 storeys) with a roughly rectangular footprint get a **pitched (gable) roof**:
-  - the ridge runs along the longest side, at about 30–40° (typical for Norway);
-  - small eaves overhang;
-  - a gable triangle closes each end.
-
-  "Roughly rectangular" means the footprint fills at least ~85% of its oriented bounding
-  rectangle. Larger blocks keep flat roofs. Use OSM `roof:shape` when it is mapped.
-- **Windows:** one small shared, repeating **facade texture** (a window bay about 3.4 m wide and a
-  storey high) on all walls. The UVs are distance along the wall ÷ bay width, and height above the
-  ground ÷ storey height. There is no geometry per window.
-- **Colours:** muted, varied **wall and roof colours** as vertex colours. Walls are pale (white,
-  cream, light ochre, light grey) and roofs dark (slate grey, brown-red). Use OSM `building:colour`
-  and `roof:colour` when mapped, toned down to the map palette. Context buildings must stay paler
-  than the order homes, so highlighted orders still stand out.
-- **Keep the draw calls:** all context buildings remain **one merged mesh**, so the detail adds
-  vertices and one texture, not draw calls. Order homes keep their own materials (they change
-  colour) but get the same roofs and windows.
-- **Budget:** at most ~650k vertices for all buildings (today ~425k), and no per-frame work for
-  buildings.
-- If a town is much denser than Kongsberg, drop windows on buildings smaller than ~40 m², or use
-  flat roofs beyond a distance from the camera.
-
-**Check:** measure fps with the whole town in view before and after (the screenshot script logs
-`fps-test`). It must not drop. Roofs should meet the walls without gaps on slopes, and the order
-homes must still be easy to spot.
+Built on 2026-11-21 as the cartoon buildings; see "Cartoon buildings" below.
 
 ### 2. The shop window uses the same trucks that drive on the map
 
@@ -432,9 +419,90 @@ All of these are constants in `src/view3d.js`; search for the name.
 | `STREAKS` | flowing cells ÷ 6, max 1400 | How many current streaks are drawn on rivers | Very wide rivers |
 | `cells.length < 120` | | Water areas smaller than this (about 5,000 m²) get no current | Small streams that should move |
 | `SEA` | 2 m above sea level | Water lower than this is the sea or a fjord: still, and where rivers end | Rarely |
+| `PALETTE`, `STYLE_OF`, `BAY` (`src/buildings3d.js`) | | Cartoon building colours, which OSM type gets which style, window spacing | Towns with a different building tradition (brick, stucco, colourful wooden rows) |
 | `FOREST_STEP` (`src/forest.js`) | `11` | Spacing of candidate forest trees (about 12 m); fewer trees when larger | Bigger or more wooded towns, to keep fps |
 | `FOREST_MAX` (`src/forest.js`) | `22000` | Most forest trees planted | Raise only after checking fps |
 | Building distance in `plantForest` | `32` units (~35 m) | Empty land closer than this to a building gets no forest | Spread-out villages (lower) or dense towns (higher) |
+
+## Cartoon buildings
+
+**Goal:** every building, order homes included, gets a cartoon style that reflects what it looks
+like in real life, with enough detail not to look like blocks and not so much that the 3D view
+lags. The code is `src/buildings3d.js` (`createBuildings`); `src/view3d.js` uses it for the town and
+the order homes.
+
+**1. Decide what the building is.** `tools/build_city.py buildings` stores each footprint's OSM
+`building` type, plus `roof:shape`, `building:colour` and `roof:colour` (in `buildings.json` →
+`info`, parallel to `buildings`, and `homes[].info`). Each type maps to a style (`STYLE_OF`):
+
+| Style | OSM types (examples) | Look |
+|---|---|---|
+| house | house, detached, semidetached_house, terrace, cabin, residential | steep pitched roof, chimney, front door, framed cross windows on wooden cladding |
+| apt | apartments, dormitory, hotel | flat roof with a rim, rows of wide windows with balconies, rooftop box |
+| com | retail, commercial, office, school, kindergarten, civic, kiosk | big shop windows, a sign band; small ones get a pitched roof |
+| ind | industrial, warehouse, service, barn | corrugated walls, a high strip window, flat roof with a rim |
+| shed | garage, garages, shed, carport | low pitched roof, a garage door every bay |
+| church | church, chapel, cathedral | very steep roof, white walls, a tower with a dark spire |
+
+Untyped buildings (`yes`) are guessed from size and height: small and low is a house, tall is
+apartments, big and low is industrial, the rest commercial. Kongsberg is well typed (3,055 houses,
+2,769 garages, 461 terraced houses, 266 apartment blocks…). Roof shapes and colours are rarely
+mapped. When they are, they win: `roof:shape=flat` forces a flat roof, `hipped` a hipped one,
+and OSM colours are mixed half-and-half with the style palette so they stay in the map's look.
+
+**2. Roof.** The footprint's oriented rectangle is measured along its longest edge.
+- **Pitched roof:** if the style wants one and the footprint is roughly rectangular (fills at
+  least 80% of that rectangle, under 22 m wide):
+  - the ridge runs along the long side, with a cartoon-steep pitch (rise = 0.78 × half the width;
+    1.05 for churches, 0.45 for sheds);
+  - the eaves overhang 0.55 m and have a thick dark fascia;
+  - about one house in four with a near-square plan gets a hipped roof, the rest gabled;
+  - gable ends are wall triangles under the roof.
+- **Flat roof:** anything else gets a flat roof with a 0.55 m parapet rim, plus a rooftop box on
+  blocks over 380 m².
+- **Walls:** they go up to the eaves (62% of the OSM height for pitched roofs, the full height for
+  flat ones), starting below the lowest corner on slopes.
+
+**3. Windows and wall detail, without geometry.** Each style has one 128 × 128 canvas texture:
+one window bay by one storey, repeating.
+- **Mapping:** u = metres along the wall ÷ bay width (4.2 m for houses, 3.4 m apartments, 6 m
+  shops and industrial, 3 m sheds), v = height above the ground ÷ storey height (3 m × the
+  building lift).
+- **Drawing:** frames, glass with a cartoon glint, cladding lines, balconies, sign bands, garage
+  doors and corrugation are drawn into the texture.
+- **Colour:** the wall colour comes from vertex colours, divided by the texture's grey base, so
+  plain wall shows the true colour and the white frames come out lighter.
+
+**4. A few chunky details as geometry**, only where they add character:
+- a front door with a white lintel on the longest wall of houses, the church and some apartment
+  blocks, facing away from the building's centre;
+- a brick or grey chimney on four houses in five;
+- the church tower and spire;
+- the parapets and rooftop boxes.
+
+Buildings under about 30 m² (most garages and sheds) skip the fascia, parapet and door.
+
+**5. Colours.** Muted pastel walls and darker roofs per style (`PALETTE`), in the spirit of
+Norwegian towns: cream, pale yellow, white, barn red, pale grey-blue walls; slate, black,
+brown-red and terracotta roofs. A building's colours come from a hash of its index, so they stay
+the same between visits. The town stays paler than a highlighted order house.
+
+**6. Keep it cheap.**
+- **Draw calls:** the whole town is merged into one geometry per facade style plus one for roofs
+  and trim, about 6 draw calls.
+- **Vertices:** each merged geometry is indexed (`mergeVertices`), so the corners of each flat
+  face are shared: Kongsberg's 8,456 buildings plus 83 homes come to **624k vertices**.
+- **Order homes:** they use the same builder but keep their own geometry and materials. Walls and
+  roof are built white (`plain`), so the home's materials can turn them the claiming player's
+  colour. Doors and chimneys keep their colours.
+- **Measured** on the same GPU: 58.7 fps in 3D with the cartoon buildings, against 58.0 before. Keep
+  the town under ~650k building vertices.
+- **For a denser town:** drop the door and chimney below a bigger area, or skip windows on the
+  smallest buildings, before adding more geometry.
+
+**Check:** houses have pitched roofs and chimneys, blocks have flat roofs with rims, the church has
+its spire, roofs meet the walls on slopes, highlighted order houses still stand out, and fps in 3D
+matches the version before.
 
 ## Forests
 
