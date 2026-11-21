@@ -20,6 +20,19 @@ contains. Nothing in the page code is specific to Kongsberg: everything town-spe
 Agreed but not built yet: see "Planned changes".
 
 **Updates:**
+- **2026-11-21, shop like the v1 store:** the shop window's floor now copies the v1 grocerybot.no
+  store:
+  - four departments from the back wall to the robots' door, each a double row of fixtures back
+    to back around a spine, the shop's full depth with one cross aisle: **DAIRY** (fridges: milk,
+    yogurt, cream, butter, cheese, eggs, juice), **PANTRY** (shelves: pasta, rice, flour, sugar,
+    oats, cereal), **PRODUCE** (bins: apples, bananas, tomatoes, carrots, onions, peppers,
+    lettuce), **BAKERY** (racks: bread);
+  - one sign per department, and the same products side by side;
+  - two-tile aisles so 20 robots don't jam.
+
+  The match was recorded again. Plum Pusher's trucks (and every cab and carriage) now get roof
+  faces that follow their real shape: flatbed crates instead of one floating slab, and the
+  slanted and nose cabs get their own roof shapes and light bar.
 - **2026-11-21, shop window:**
   - clicking a player in the Standings opens their shop window;
   - the shop window's trucks are each player's own trucks, the same as on the map;
@@ -205,8 +218,9 @@ Things to check (see the next section for what to change):
 - [ ] The shop window opens on "Your shop", switches when you click another shop or a standings
       row, closes with × and comes back when you click a shop or a row
 - [ ] The shop window's trucks look like that player's trucks on the map
-- [ ] Shop departments make sense: milk only in the dairy fridges, fruit and vegetables only in
-      the bins, bread on the bakery rack, each under its sign
+- [ ] The shop window shows the v1 store layout: DAIRY, PANTRY, PRODUCE, BAKERY double rows from
+      the back wall, one sign each, the same products side by side
+- [ ] Every look's trucks look clean in the shop window (check flatbed, slanted and nose cabs)
 - [ ] In the shop window, robots carry and load items, trucks back in and drive off, and truck
       tags fill up as the replay plays
 - [ ] Roads cross rivers on raised bridges with railings, and the road surface shows on the deck
@@ -238,11 +252,11 @@ gh2 api -X POST repos/BusinessManBab/grocery-bot-T-3d/pages -f 'source[branch]=m
   so it shows what is really happening in that shop at that tick:
   - **The store:** the same floor, walls, red bay markings and Grocery Bot sign, laid out like a
     real grocery store, with red department signs as on the v1 homepage:
-    - **at the back** (far from the robots' door): dairy fridges (milk, yogurt, cream, butter,
-      cheese, eggs) and a drinks fridge (juice);
-    - **in the middle aisle:** pantry (pasta, rice, sugar) and breakfast (cereal, oats) shelves;
-    - **by the door:** the bakery rack (bread, flour), and fruit (apples, bananas, tomatoes) and
-      vegetable (carrots, onions, peppers, lettuce) bins.
+    - four departments from the back wall to the robots' door, as in the v1 store: **Dairy**
+      (fridges), **Pantry** (shelves), **Produce** (bins), **Bakery** (bread racks);
+    - each department is a double row of fixtures back to back around a spine, across the
+      shop's depth with one cross aisle, and one sign over it;
+    - the same products sit next to each other.
 
     Fixtures and signs come from the shop layout (`shop.json` → `departments`, `fixtures`). See
     "A realistic shop" under "Planned changes".
@@ -343,8 +357,15 @@ truck with an affine transform:
 - svg y 38 is the ground;
 - height scales by 0.344.
 
-Roof faces get the look's colours: the shell white, canvas cloth or flatbed wood, and the cab in
-the player's colour. The rolling rear door, the loaded goods and the order tag are kept.
+Roof faces follow each look's real shape:
+- cab roofs only where each cab is flat (`CAB_ROOFS`: flat, high, nose with its lower hood,
+  slanted), in the player's colour, plus a dark bar for the `lights` visor;
+- box and cooler carriages get a white roof (the cooler also its unit on top), canvas carriages a
+  cloth roof;
+- flatbeds get the wooden bed with each crate's top in its colour, lowest first.
+
+The first version used one flat slab for every cab and covered flatbeds, which looked scuffed on
+Plum Pusher's slanted, flatbed truck. The rolling rear door, the loaded goods and the order tag are kept.
 `setPlayer` switches the art when the window switches shop. Checked against the map for every
 look: plum canvas with dots, yellow cooler with the nose cab, black flatbed with roof lights, and
 so on.
@@ -355,16 +376,48 @@ Built on 2026-11-21. The standings row click in `src/game-view.js` focuses the f
 and calls `panels.showShop(player.seat)`. The window switches to that player ("Your shop" on your
 own row) and reopens if it was closed. Checked for all five rows.
 
-### 4. A realistic shop: groceries where they belong: done in the preview
+### 4. A realistic shop: groceries where they belong: done in the preview (v1 store layout)
 
-Built in the preview on 2026-11-21: `tools/simulate_match.py` replaces the engine's `make_shop`
-with `realistic_shop`, which deals the products by the `LAYOUT` table below. A new match was then
-recorded, so the robots really fetch milk from the dairy fridges; Rush AI still wins, with 5,738
-points. The shop window draws the departments' fixtures and red signs from `shop.json`. The live
-game itself still uses round-robin shelves, and changing it there still needs the approval
-described below.
+Built in the preview on 2026-11-21 and then changed to copy the v1 grocerybot.no store (the
+reference image).
 
-The original proposal follows.
+**Layout:** `tools/simulate_match.py` replaces the engine's `make_shop` with `realistic_shop`. It
+keeps the engine's grid, truck bays, loading cells and robot start cell, and builds the shelves
+from `DEPARTMENTS`:
+
+| Department | Fixture | Shelf columns (spine) | Products, in order |
+|---|---|---|---|
+| Dairy | fridge | x 2 and 4 (3) | milk, yogurt, cream, butter, cheese, eggs, juice |
+| Pantry | shelf | x 7 and 9 (8) | pasta, rice, flour, sugar, oats, cereal |
+| Produce | bin | x 12 and 14 (13) | apples, bananas, tomatoes, carrots, onions, peppers, lettuce |
+| Bakery | rack | x 17 and 19 (18) | bread |
+
+- **Rows:** y 3–5 and 7–9, so row 6 is the cross aisle and rows 1–2 stay free for the loading
+  bays.
+- **Aisles:** two tiles wide between departments (x 5–6, 10–11, 15–16, 20–21), plus x 1 on the
+  left.
+- **Products:** each department fills its left column top to bottom, then its right column. Each
+  product gets a run of neighbouring cells (12 cells shared out, the first products one extra),
+  48 shelf cells in all.
+- **Spines:** wall cells. The engine and every bot (reference, starter and rush-ai) already treat
+  walls as obstacles, so nothing else changes.
+- **Size:** the table is drawn for the 23 × 12 shop (5 trucks). The script stops with a message
+  for another size.
+
+**Shop window:** `shop.json` → `departments` and `fixtures` give each shelf its fixture. Spines get
+their neighbours' height in the plain spine colour, and each department gets one sign centred over
+its double row, as in the v1 `arena.js`.
+
+**Effect on the game:** in this recorded match (seed 7) every team scores less than with the
+engine's shelves. The reference bots score 3,557 and 3,156. Rush AI scores 1,528 from 40
+deliveries, the same delivery count but with lateness and missed-order penalties, because its
+tuning assumes the old shop with shelves close together. A single-tile aisle between Dairy and
+Pantry was worse (robots jammed), hence the two-tile aisles. Retune bots before using this layout
+in the real game.
+
+**Real game:** it still uses the round-robin shelves, and changing it needs the approval below.
+
+The original proposal follows. It was replaced by the layout above.
 
 **Goal:** the shop floor should look and work like a real grocery store. Products of a kind
 belong together in departments with the right fixtures: milk and dairy in the fridges at the
@@ -397,7 +450,7 @@ milk from the bread rack.
 | x 19, upper | Fruit | bin | apples, bananas, tomatoes |
 | x 19, lower | Vegetables | bin | peppers, lettuce |
 
-(As built; it differs a little from the first proposal so drinks get their own fridge.)
+(A first build used this single-column layout; it was replaced by the v1 store layout above.)
 
 Dairy is at the back, far from the entrance, as in real stores. Fruit, vegetables and bread are
 next to it.
