@@ -147,6 +147,9 @@ Things to check (see the next section for what to change):
 - [ ] Phone width: the 2D/3D switch does not cover anything important
 - [ ] The shop window opens on "Your shop", switches when you click another shop, closes with ×
       and comes back when you click a shop
+- [ ] In the shop window, robots carry and load items, trucks back in and drive off, and truck
+      tags fill up as the replay plays
+- [ ] Roads cross rivers on raised bridges with railings, and the road surface shows on the deck
 - [ ] Clicking an order house opens the order card with the right items, times and happiness
 
 ### 7. Publish
@@ -164,12 +167,23 @@ gh2 api -X POST repos/BusinessManBab/grocery-bot-T-3d/pages -f 'source[branch]=m
 ## Shop window and order card
 
 **What players see:**
-- **Shop window (bottom right):** opens when the map loads. It shows the robots inside a shop in
-  that player's colours: picking items from the shelves (a white ring flashes on the shelf),
-  carrying up to 3 items (coloured dots), and loading them into the trucks at the bays (an arrow
-  into the bay). A small bar under each docked truck shows how much of its orders is loaded.
-  Trucks out on the road show as an empty "out" bay. The footer counts working robots, orders
-  being packed, and trucks home or out.
+- **Shop window (bottom right):** opens when the map loads, about 540 px wide on desktop
+  (`min(540px, 42vw)`) and full width on phones. It is the **v1 grocerybot.no homepage
+  animation**, Erik's isometric store from `public/static/arena.js` on `main`, ported to
+  `src/shop-iso.js`. It is driven by the recorded match instead of the homepage's canned replay,
+  so it shows what is really happening in that shop at that tick:
+  - **The store:** the same floor, walls, red bay markings and Grocery Bot sign, with fridges
+    (dairy, juice), produce bins, bread racks and shelves. The v1 departments are gone because
+    the v2 shop mixes products, so each shelf gets the fixture of its product.
+  - **The robots:** Grocery Bots in the player's own look (shape, colour, eyes). They walk tile to
+    tile, look the way they last moved, hop when they pick, carry what they picked in their basket,
+    and cheer when they load it into a truck.
+  - **The trucks:** the v1 trucks in the player's colour. Each backs into its bay when it comes
+    home, with hazard lights, and drives off with its door closing when it leaves. The tag above it
+    has one square per queued item, filled as robots load it (`+N` past 10 items), and the loaded
+    goods show inside the cargo box.
+  - **The footer:** counts working robots, orders being packed, and trucks home or out.
+  - **The standings** shrink to fit above the window (`--shop-h`).
 - **Its title:** "Your shop" for the viewer's own seat (`meta.you` in `game.json`), otherwise
   "<name>'s shop".
 - **Switching and closing:** clicking any shop on the map, in 2D or 3D, switches the window to
@@ -218,6 +232,10 @@ option yet.
   - the binary layout: `seats`, `ticks`, `frameBytes`
   - `orders {id: {items, address, placed, expires, deadline, firstLoad, ready, deliveredAt,
     satisfaction, points, reward, rushBonus, history [[tick, status, seat]]}}`
+- `shop.json` → `truckLoads[seat][truck]`: `[[tick, item indexes, "0110"]]`, written whenever the
+  items queued on that truck, or which of them are loaded, change. It fills the truck tags.
+  Truck arrivals and departures come from the public feed's truck states (home = idle, picking,
+  loading or ready).
 - `shop.bin`: for each tick (0 = before the first move), for each seat in feed order, the robots
   as `[x, y, action (0 wait, 1 move, 2 pick, 3 load), item1, item2, item3]` (item = product index
   + 1, 0 = empty), then the trucks as `[items loaded, items needed]` for the orders queued on
@@ -244,6 +262,28 @@ All of these are constants in `src/view3d.js`; search for the name.
 | `STREAKS` | flowing cells ÷ 6, max 1400 | How many current streaks are drawn on rivers | Very wide rivers |
 | `cells.length < 120` | | Water areas smaller than this (about 5,000 m²) get no current | Small streams that should move |
 | `SEA` | 2 m above sea level | Water lower than this is the sea or a fjord: still, and where rivers end | Rarely |
+
+## Bridges
+
+Where a road crosses water it runs on a bridge, found automatically in `src/view3d.js` (look for
+"bridges"):
+
+- **Finding them:** each road line is sampled every 3 units against the water grid. A run of water
+  samples between 10 and 320 units long becomes a straight deck from just before the water to just
+  after it.
+- **Height:** the deck keeps the bank heights at its two ends but stays at least about 5.5 m above
+  the lowest water under it. It ramps onto the banks over `RAMP` (26 units).
+- **Two carriageways:** a road drawn as two lines becomes one wider deck.
+- **The structure:** a pale slab, a railing with posts on each side, and one pier per ~45 units of
+  span, down to the water. That's deliberately small, nothing grand.
+- **Riding on it:** roads, trucks and their trails all use `roadY()`, the ground or the deck,
+  whichever is higher. So trucks drive over the bridge and tilt up and down the ramps.
+- **Kongsberg:** 6 bridges. Only crossings that are in the game's road network get one, so
+  footbridges that aren't roads in the game stay unbridged.
+
+For another town nothing needs changing, as long as its `game-map.json` has water polygons and
+the roads that cross them. Check the bridges in the 3D view: with lots of quays, lower the 320-unit
+cap so a road running along the water's edge isn't turned into a long "bridge".
 
 ## How the river direction is worked out
 
