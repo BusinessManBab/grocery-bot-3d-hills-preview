@@ -248,6 +248,141 @@ frames and the order details, plus `meta.you` from the signed-in account. During
 should only show what rivals can already see, or only start once the game is over, because
 showing rivals' robots, claims and items live would leak strategy.
 
+## Planned changes (not built or deployed yet)
+
+These are agreed requirements for the next version of the map. None of them is live on the
+preview yet. Each lists what it should do, how to build it, and how to check it.
+
+### 1. Buildings with real-world detail, without making the 3D view lag
+
+**Goal:** buildings should look like real buildings (roof shapes, windows, varied colours),
+like the town in real life. Detail must never cost smoothness: the 3D view has to stay at about
+60 fps on an ordinary laptop with the whole town in view.
+
+**How:**
+- **Roofs:** small houses (OSM `house`, `detached`, `semidetached_house`, `terrace`, or any building
+  up to about 2 storeys) with a roughly rectangular footprint get a **pitched (gable) roof**:
+  - the ridge runs along the longest side, at about 30–40° (typical for Norway);
+  - small eaves overhang;
+  - a gable triangle closes each end.
+
+  "Roughly rectangular" means the footprint fills at least ~85% of its oriented bounding
+  rectangle. Larger blocks keep flat roofs. Use OSM `roof:shape` when it is mapped.
+- **Windows:** one small shared, repeating **facade texture** (a window bay about 3.4 m wide and a
+  storey high) on all walls. The UVs are distance along the wall ÷ bay width, and height above the
+  ground ÷ storey height. There is no geometry per window.
+- **Colours:** muted, varied **wall and roof colours** as vertex colours. Walls are pale (white,
+  cream, light ochre, light grey) and roofs dark (slate grey, brown-red). Use OSM `building:colour`
+  and `roof:colour` when mapped, toned down to the map palette. Context buildings must stay paler
+  than the order homes, so highlighted orders still stand out.
+- **Keep the draw calls:** all context buildings remain **one merged mesh**, so the detail adds
+  vertices and one texture, not draw calls. Order homes keep their own materials (they change
+  colour) but get the same roofs and windows.
+- **Budget:** at most ~650k vertices for all buildings (today ~425k), and no per-frame work for
+  buildings.
+- If a town is much denser than Kongsberg, drop windows on buildings smaller than ~40 m², or use
+  flat roofs beyond a distance from the camera.
+
+**Check:** measure fps with the whole town in view before and after (the screenshot script logs
+`fps-test`). It must not drop. Roofs should meet the walls without gaps on slopes, and the order
+homes must still be easy to spot.
+
+### 2. The shop window uses the same trucks that drive on the map
+
+**Goal:** the trucks parked at the bays in the shop window are the player's own trucks, with the
+same carriage, cab, visor, decal and colour as that player's trucks on the 2D and 3D map (from
+`looks.js`). Not the generic v1 truck.
+
+**How:**
+- In `src/shop-iso.js`, draw the player's side-view truck art (`truckArt(look)` from `looks.js`,
+  the same art the map uses) on the visible side of the isometric truck with an affine transform:
+  - svg x −74 (rear) … 70 (cab) runs along the truck's length, u = 0 … −3.1 cells;
+  - svg y 38 is the ground;
+  - height scales by about 0.344, so the 90-unit-tall art matches the v1 truck's 31-unit cargo box.
+- Add roof faces in the look's colours (shell, canvas cloth or flatbed wood; the cab in the
+  player's colour).
+- Keep the parts that show what is loaded: the rolling rear door, the goods inside, and the order
+  tag above the truck.
+- When the window switches shop, it switches truck look too (`setPlayer`).
+
+**Check:** for each of the five looks, the docked trucks in the shop window match the trucks
+driving that player's routes on the map.
+
+### 3. Clicking a player in the standings opens their shop window
+
+**Goal:** clicking a player's row in **Standings** also shows that player's shop in the bottom
+right ("Your shop" for your own row, "<name>'s shop" otherwise). It reopens the window if it was
+closed. It works the same in 2D and 3D, and on phones.
+
+**How:** in `src/game-view.js`, the standings row click already focuses that player's fleet
+(`play.focus`). It should also call `panels.showShop(player.seat)`. Clicking the same row again
+clears the fleet focus as today, but leaves the shop window on that player. Use × to close it.
+
+**Check:** clicking each row switches the shop window and its title. Clicking a shop on the map,
+and the status link in the order card, still work.
+
+### 4. A realistic shop: groceries where they belong
+
+**Goal:** the shop floor should look and work like a real grocery store. Products of a kind
+belong together in departments with the right fixtures: milk and dairy in the fridges at the
+back, fruit and vegetables in bins near the entrance, bread on the bakery rack, dry goods on
+shelves in the middle aisles. Not vegetables scattered everywhere.
+
+**Why it looks wrong today:** the engine's `make_shop` (`engine/shop.py`) deals the products out
+round-robin, column by column (`products[len(items) % len(products)]`). So the 25 shelf cells mix
+milk, bread, apples, pasta and so on. The shop window draws exactly what the engine has, so the
+fix belongs in the layout itself, not only in the drawing. Otherwise robots would be seen taking
+milk from the bread rack.
+
+**Proposed layout** for the current 23 × 12 shop:
+- **Grid:** shelf columns at x = 3, 7, 11, 15, 19. Each column has an upper block (y = 3–5, 3 cells)
+  and a lower block (y = 7–8, 2 cells), 25 cells in all.
+- **Doors:** the robots' start cell (21, 10, bottom right) is the entrance, and the truck bays are
+  along the top wall.
+- **Products:** all 21 in the game, with the most-ordered ones twice.
+
+| Block | Department | Fixture | Products |
+|---|---|---|---|
+| x 3, upper | Dairy | fridge | milk, milk, yogurt |
+| x 3, lower | Dairy | fridge | cream, butter |
+| x 7, upper | Cheese, eggs and juice | fridge | cheese, eggs, juice |
+| x 7, lower | Breakfast | shelf | cereal, oats |
+| x 11, upper | Pantry | shelf | pasta, rice, pasta |
+| x 11, lower | Baking | shelf | flour, sugar |
+| x 15, upper | Vegetables | bin | lettuce, tomatoes, peppers |
+| x 15, lower | Bakery | rack | bread, bread |
+| x 19, upper | Fruit | bin | apples, bananas, bananas |
+| x 19, lower | Vegetables | bin | carrots, onions |
+
+Dairy is at the back, far from the entrance, as in real stores. Fruit, vegetables and bread are
+next to it.
+
+**How:**
+- **In the game (`astar-as/grocery-bot`):** change `make_shop` to place products by department
+  from a table like this instead of round-robin.
+  - Return `departments: [{name, x, y, fixture}]` and a fixture per shelf cell in the shop
+    layout. The v1 `arena.js` already draws department signs and fixtures from these.
+  - Keep the rest as is: the same shelf cells, a cell per product, every product reachable from an
+    aisle, and the same layout for every player (fairness).
+  - If a difficulty uses fewer product types, skip the missing ones and keep the departments
+    together.
+  - This is a game-rule change. It changes walking distances, bot strategies and the replay
+    fixtures (`tests/fixtures/ai-demo.json` and state hashes), so it needs approval
+    (`NEEDS_APPROVAL.md`), an engine version bump, and a note to players that the shop layout
+    changed.
+- **In this preview:** record a new match with the realistic layout so the robots really pick
+  milk from the dairy fridges. In `tools/simulate_match.py`, replace `engine.simulation.make_shop`
+  with a version that uses the table above before `create_match`. Write the departments and
+  fixtures into `shop.json`. Then `src/shop-iso.js` should take fixtures and department signs from
+  `shop.json` instead of guessing a fixture from each product (`FIXTURE_OF`).
+- **Order card:** the item list can group items by department, in the order a robot would walk
+  the shop.
+
+**Check:** in the shop window, each department is together under its sign: milk only in the
+dairy fridges, fruit and vegetables only in the bins, bread only on the rack. Robots carrying
+milk have just come from the dairy fridges. Run the game's tests and a benchmark after the engine
+change, and compare walking distance per order with the old layout.
+
 ## Settings you may want to change per town
 
 All of these are constants in `src/view3d.js`; search for the name.
