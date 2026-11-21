@@ -20,6 +20,9 @@ contains. Nothing in the page code is specific to Kongsberg: everything town-spe
 Agreed but not built yet: see "Planned changes".
 
 **Updates:**
+- **2026-11-21, guide:** new section "The 3D map's style" (map layers, roads, lighting, 3D shops,
+  3D trucks, order-house highlights, sizing, camera, labels and clicks). "Planned changes" marked
+  as built.
 - **2026-11-21, shop like the v1 store:** the shop window's floor now copies the v1 grocerybot.no
   store:
   - four departments from the back wall to the robots' door, each a double row of fixtures back
@@ -339,10 +342,10 @@ frames and the order details, plus `meta.you` from the signed-in account. During
 should only show what rivals can already see, or only start once the game is over, because
 showing rivals' robots, claims and items live would leak strategy.
 
-## Planned changes (not built or deployed yet)
+## Planned changes (all four now built)
 
-These are agreed requirements for the next version of the map. None of them is live on the
-preview yet. Each lists what it should do, how to build it, and how to check it.
+These started as agreed requirements written before building them. All four have since been built
+on the preview; each says how, then keeps the original spec for reference.
 
 ### 1. Buildings with real-world detail, without making the 3D view lag: done
 
@@ -499,6 +502,70 @@ All of these are constants in `src/view3d.js`; search for the name.
 | `FOREST_STEP` (`src/forest.js`) | `11` | Spacing of candidate forest trees (about 12 m); fewer trees when larger | Bigger or more wooded towns, to keep fps |
 | `FOREST_MAX` (`src/forest.js`) | `22000` | Most forest trees planted | Raise only after checking fps |
 | Building distance in `plantForest` | `32` units (~35 m) | Empty land closer than this to a building gets no forest | Spread-out villages (lower) or dense towns (higher) |
+
+## The 3D map's style
+
+How the 3D view (`src/view3d.js`, three.js 0.170) keeps the 2D map's look and adds depth. Read
+this first when restyling, then the sections below for buildings, forests and bridges.
+
+**Map layers keep their 2D colours.**
+- **Ground:** the 2D map's paper (`#f0e9d8`), park green (`#c9d8ac`) and water (`#86b8c5`) are
+  painted once into a canvas texture, up to 4,096 px on the long side. The texture is draped over
+  the terrain grid as a lit mesh, so slopes shade themselves while flat ground stays its 2D colour.
+- **Roads:** the same five strokes as the 2D map, as flat ribbons with round joins, laid in
+  2D order (lane, street casing, major casing, street, major). Half widths in map units: lane 2.2,
+  street 7.5/5, major 11/8.2. They're cut into ~6-unit pieces so they follow the ground. They
+  don't write depth and use polygon offset, so they lie on the terrain without flicker
+  (`renderOrder` 2–6, after the ground at 1).
+- **Board edge:** a skirt drops from the terrain's edge to a flat base 26 units down, so the map's
+  borders read as the edge of a board (`SLAB`).
+- **Lighting:** a hemisphere light plus a sun (`SUN_DIR`), set so flat ground comes out at its 2D
+  colour. The sun's shadow map follows the camera target, sized to the view, so shadows stay sharp.
+  A soft fog in the page colour fades the far edge, and dusk is the 2D dark overlay drawn over the
+  3D view.
+
+**Shops** (`buildShop`) are the 2D shop drawing as a little building:
+- cream walls with brown corner posts and plinth, a band in the player's colour, and an 8-tile
+  striped awning;
+- a window and a door, and the red GROCERY BOT sign on two posts;
+- a deep footing so it can stand on a slope (it rests on its highest corner);
+- buildings and trees within `PLAZA` are cleared so the real store's footprint doesn't bury it.
+
+**Trucks** (`buildTruck`) are the player's `looks.js` truck art as a model:
+- the cab's and carriage's exact SVG silhouettes are extruded (SVGLoader);
+- decals are thin boxes and discs on both sides;
+- the bot's face from `looks.js` is a texture on both doors, with the visor (shade brim, light
+  bar or tint), bumper, headlamps and wheels added;
+- they turn smoothly to their heading, tilt nose up or down on slopes and bridge ramps (`roadY`),
+  and bounce slightly while driving;
+- trails behind them are ribbons on the ground that fade over 7 ticks, as in 2D.
+
+**Order houses:** each delivery address's real building (cartoon style), coloured by order state:
+- **Colours:** cream walls with a brown roof while open; the claiming player's colour (lighter
+  walls, full-colour roof) once claimed; faded when another player is focused.
+- **Glow:** a soft disc in that colour draped over the ground around the house.
+- **Pin:** the 2D order square on a stem, floating above the roof and always about 24 px tall on
+  screen. It doesn't hide behind buildings and bobs gently.
+- **Selected:** a clicked order's pin grows 1.5× and its glow pulses.
+- **Delivered:** shows the 2D "+points" pop at the house.
+
+**Sizes, like 2D sprites.** Shops and trucks are exaggerated, as on the 2D map (`SHOP_SCALE` 2.4,
+`TRUCK_SCALE` 0.9 at the fit zoom). They scale with their own distance to the camera, as
+`(distance / fit distance)^0.65` clamped to 0.16–1.25. So they grow more slowly than the map when
+you zoom in, and a truck close to a low camera doesn't fill the screen.
+
+**Camera and hand-over.**
+- **Default:** tilted 42° (`TILT`), north up, framing the same box as the 2D `fit()`. The
+  projection centre is shifted into the free area between the panels (`setViewOffset`).
+- **Controls:** drag to pan, right-drag or two fingers to tilt and turn, double-click to fly
+  home. The orbit point rides on the ground, and the camera never goes below the hills.
+- **Switching views:** 2D → 3D starts straight down over the same spot and zoom and tilts in over
+  1.2 s; 3D → 2D keeps the spot and zoom.
+
+**Labels and clicks.** Place labels, shop name pills, parked-truck dots and "+points" pops are
+drawn on the 2D overlay canvas at projected 3D positions, in the 2D map's own styles. Clicks use
+screen-space hit areas (`picks`) that both views fill each frame: shops and order houses, with
+orders winning over a shop next to them.
 
 ## Cartoon buildings
 
