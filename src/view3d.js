@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { MapControls } from 'three/addons/controls/MapControls.js';
 import { SVGLoader } from 'three/addons/loaders/SVGLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { forestPath } from './forest.js';
 import { COLORS, HEADS, INK as TRUCK_INK, SHELL, EDGE, WOOD, LAMP, mix, light, face } from './looks.js';
 
 const M = 1 / 1.113;              // world units per metre (one unit is 1e-5 degree of latitude)
@@ -29,8 +30,8 @@ export async function createWorld3d(opts) {
     fetch('data/terrain.json').then(res => res.json()),
     fetch('data/terrain.bin').then(res => res.arrayBuffer()).then(buf => new Uint16Array(buf)),
   ]);
-  // optional: OSM forest/wood and open land (fields, built-up areas) for planting forests
-  const cover = await fetch('data/landcover.json').then(res => res.ok ? res.json() : null).catch(() => null) || { wood: [], open: [] };
+  // forest: the same tree spots the 2D map paints green under (src/forest.js)
+  const forest = opts.forest || [];
 
   // ---- renderer, scene, camera ------------------------------------------------
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
@@ -130,6 +131,7 @@ export async function createWorld3d(opts) {
     g.setTransform(k, 0, 0, k, -X0 * k, -Z0 * k);
     g.fillStyle = PALETTE.green;
     g.fill(area(town.green));
+    if (forest.length) g.fill(forestPath(forest));          // green under the forest, as on the 2D map
     g.fillStyle = PALETTE.water;
     g.fill(area(town.water));
     const t = new THREE.CanvasTexture(canvas);
@@ -601,36 +603,7 @@ export async function createWorld3d(opts) {
   // Around Kongsberg most land the map leaves empty is spruce forest in real life. Fields, meadows,
   // built-up areas, parks (they have their own trees), roads, water and land near buildings stay clear.
   // Two instanced meshes for every tree, about 20 triangles each, so the forest stays cheap to draw.
-  const forest = [];
   {
-    let seed = 23;
-    const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-    const blocked = roadMask();
-    const poly = list => list.map(p => {
-      const pts = [];
-      for (let i = 0; i < p.length; i += 2) pts.push([wx(p[i]), wy(p[i + 1])]);
-      const xs = pts.map(q => q[0]), zs = pts.map(q => q[1]);
-      return { pts, box: [Math.min(...xs), Math.min(...zs), Math.max(...xs), Math.max(...zs)] };
-    });
-    const within = (list, x, z) => list.some(p => x >= p.box[0] && x <= p.box[2] && z >= p.box[1] && z <= p.box[3] && inside([x, z], p.pts));
-    const wood = poly(cover.wood), open = poly(cover.open), parks = poly(town.green);
-    // "town": within ~35 m of any building
-    const cell = 8, cols = Math.ceil(W / cell), rows = Math.ceil(D / cell), near = new Uint8Array(cols * rows), R = 4;
-    for (const b of extra.buildings) for (let i = 1; i < b.length; i += 2) {
-      const c = Math.floor((wx(b[i]) - X0) / cell), r = Math.floor((wy(b[i + 1]) - Z0) / cell);
-      for (let rr = Math.max(0, r - R); rr <= Math.min(rows - 1, r + R); rr++) for (let cc = Math.max(0, c - R); cc <= Math.min(cols - 1, c + R); cc++) near[rr * cols + cc] = 1;
-    }
-    const inTown = (x, z) => near[Math.floor((z - Z0) / cell) * cols + Math.floor((x - X0) / cell)] === 1;
-    const STEP = 11;
-    for (let z = Z0 + STEP / 2; z < Z1 && forest.length < 22000; z += STEP) for (let x = X0 + STEP / 2; x < X1; x += STEP) {
-      const px = x + (rand() - .5) * STEP * .9, pz = z + (rand() - .5) * STEP * .9;
-      if (px < X0 + 3 || px > X1 - 3 || pz < Z0 + 3 || pz > Z1 - 3) continue;
-      if (blocked(px, pz) || isWater(px, pz) || isWater(px + 8, pz) || isWater(px - 8, pz) || isWater(px, pz + 8) || isWater(px, pz - 8)) continue;
-      const mapped = within(wood, px, pz);
-      if (!mapped && (inTown(px, pz) || within(open, px, pz) || within(parks, px, pz))) continue;
-      if (rand() > (mapped ? .85 : .7)) continue;
-      forest.push([px, pz, .8 + rand() * .7, rand(), rand() < .78]);
-    }
     const spruce = forest.filter(t => t[4]), birch = forest.filter(t => !t[4]);
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0);
     const plant = (list, crownGeo, trunkGeo, shades) => {

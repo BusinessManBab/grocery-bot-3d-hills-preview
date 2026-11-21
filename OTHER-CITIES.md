@@ -20,6 +20,7 @@ yet, because there is no Oslo replay (see step 2).
 | `game.json` | One finished game played **on that same map** | The game server's `/api/games/CODE?since=0` (step 2) |
 | `buildings.json` | OSM building footprints, with each delivery home matched to its real building | `tools/build_city.py buildings` |
 | `terrain.bin` + `terrain.json` | Elevation grid over the map bounds | `tools/build_city.py terrain` |
+| `landcover.json` | OSM forest and woodland (trees go here) and fields, meadows and built-up land (no trees). Optional: without it there is no forest | `tools/build_city.py landcover` |
 | `shop.json` + `shop.bin` | Inside the shops: robot positions, what they carry, truck loading; every order's items, address and timeline. Optional: without them the page simply has no shop window or order card | The full engine replay of the same game (see "Shop window and order card") |
 
 Everything else (`index.html`, `src/`, `static/`, `assets/`) stays as it is.
@@ -115,6 +116,19 @@ the bounds. It prints the height range: Kongsberg is 123–352 m and Oslo 0–10
 The tiles have seabed depths under the sea. The script clamps everything below 0 m to 0 m, so the
 sea surface stays flat.
 
+### 4b. Land cover for the forest: `data/landcover.json`
+
+```sh
+python3 tools/build_city.py landcover --osm .cache/osm-landcover.json
+```
+
+This makes one Overpass query (cached like the buildings one) for these areas in the map bounds:
+- **Trees:** `landuse=forest`, `natural=wood`/`scrub`.
+- **Never trees:** fields, meadows, grass, residential, industrial, commercial and retail land,
+  cemeteries, railways, wetland and bare rock.
+
+Kongsberg has 21 wooded and 48 open areas.
+
 ### 5. Bump the cache version
 
 GitHub Pages' CDN serves old JavaScript for up to 10 minutes. Raise `?v=N` everywhere it appears:
@@ -150,6 +164,8 @@ Things to check (see the next section for what to change):
 - [ ] In the shop window, robots carry and load items, trucks back in and drive off, and truck
       tags fill up as the replay plays
 - [ ] Roads cross rivers on raised bridges with railings, and the road surface shows on the deck
+- [ ] The empty hillsides around town are forest in 3D, with green under them on the 2D map
+      (and on the 3D ground). Fields, town, parks, roads and water have no forest trees
 - [ ] Clicking an order house opens the order card with the right items, times and happiness
 
 ### 7. Publish
@@ -397,6 +413,34 @@ All of these are constants in `src/view3d.js`; search for the name.
 | `STREAKS` | flowing cells ÷ 6, max 1400 | How many current streaks are drawn on rivers | Very wide rivers |
 | `cells.length < 120` | | Water areas smaller than this (about 5,000 m²) get no current | Small streams that should move |
 | `SEA` | 2 m above sea level | Water lower than this is the sea or a fjord: still, and where rivers end | Rarely |
+
+## Forests
+
+The land the map leaves empty around a town (hillsides, slopes, the edge of the map) is usually
+forest in real life, especially in Norway. The map plants it, and both views show the same
+forest.
+
+- **Where trees go** (`src/forest.js`, `plantForest`):
+  - wherever OSM maps forest or woodland (`data/landcover.json`);
+  - on empty land that is more than ~35 m from any building and not in a field, meadow,
+    residential, industrial or other open area, park, road, water or shop plaza.
+
+  Candidates sit on a jittered grid every 11 units (about 12 m). About 85% of mapped woodland
+  spots and 70% of empty-land spots get a tree, seeded so it looks the same on every visit and in
+  both views. Kongsberg has about 18,300 forest trees.
+- **2D:** green (the map's park green, `#c9d8ac`) under every tree, a round blob per tree that
+  merges into woodland (`forestPath`). This shows on the 2D map and on the 3D ground.
+- **3D:** about 78% spruce (a cone on a short trunk) and 22% birch (a rounded crown), in muted
+  greens, slightly varied in size, height and rotation, standing on the terrain. Park trees are
+  separate and stay where they were.
+- **Cost:** all forest trees are two instanced meshes (spruce and birch) of about 20 triangles a
+  tree, so 18,000 trees are four draw calls plus their shadows. `FOREST_MAX` (22,000) caps it.
+  For bigger or more wooded towns, raise `FOREST_STEP` instead of letting the count grow, and
+  check fps.
+- **Other towns:** run the `landcover` step. The page plants the forest without code changes. In
+  a town where the empty land is really farmland or bare mountain, OSM's open areas keep it clear.
+  If OSM is sparse there, add a rule, such as no trees above the tree line, using `terrain.json`
+  heights.
 
 ## Bridges
 
