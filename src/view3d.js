@@ -330,7 +330,7 @@ export async function createWorld3d(opts) {
     const mats = { frame: lit('#583a2d'), wall: lit('#fff3da'), paint: lit(player.colour), glass: lit('#b6d4d7'), door: lit('#65493a'),
       sign: new THREE.MeshLambertMaterial({ map: signTexture }), post: lit('#583a2d') };
     const g = new THREE.Group();
-    const w = 62, h = 30, d = 34, front = d / 2;
+    const w = 62, h = 34, d = 34, front = d / 2;
     g.add(box(w, 1.6, d + 2, mats.frame, 0, .8, 0));                        // plinth
     g.add(box(w - 3, h, d - 3, mats.wall, 0, h / 2, 0));                    // cream walls
     for (const sx of [-1, 1]) for (const sz of [-1, 1]) g.add(box(2.4, h, 2.4, mats.frame, sx * (w / 2 - 1.2), h / 2, sz * (d / 2 - 1.2)));
@@ -621,8 +621,9 @@ export async function createWorld3d(opts) {
     controls.target.x = clamp(controls.target.x, X0, X1);
     controls.target.z = clamp(controls.target.z, Z0, Z1);
     const distance = camera.position.distanceTo(controls.target);
-    // Like the 2D sprites, actors grow more slowly than the map when you zoom in.
-    const grow = clamp(Math.sqrt(distance / fitDistance), .2, 1.25);
+    // Like the 2D sprites, actors grow more slowly than the map when you zoom in. Measured per
+    // object, so a truck close to a low camera does not fill the screen.
+    const growAt = (x, z) => clamp(Math.sqrt(camera.position.distanceTo(tmp.set(x, 0, z)) / fitDistance), .2, 1.25);
 
     // sun follows the view so the shadow map stays sharp where you look
     const reach = clamp(distance * 1.1, 260, 2600);
@@ -665,7 +666,8 @@ export async function createWorld3d(opts) {
         actor.dim = dim;
         for (const m of actor.mats) { m.transparent = dim < 1 || !!m.map; m.opacity = dim; m.needsUpdate = true; }
       }
-      actor.shop.group.scale.setScalar(SHOP_SCALE * grow);
+      actor.grow = growAt(player.shop[0], player.shop[1]);
+      actor.shop.group.scale.setScalar(SHOP_SCALE * actor.grow);
       let parked = 0;
       const colour = new THREE.Color(player.colour);
       actor.trucks.forEach((truck, t) => {
@@ -678,6 +680,7 @@ export async function createWorld3d(opts) {
           if (truck.heading === null) truck.heading = want;
           else truck.heading += Math.atan2(Math.sin(want - truck.heading), Math.cos(want - truck.heading)) * Math.min(1, dt * 10);
         }
+        const grow = growAt(now.x, now.y);
         truck.obj.visible = true;
         truck.obj.position.set(now.x, Math.abs(Math.sin(time * 9 + t * 2 + player.seat)) * .6 * grow, now.y);
         truck.obj.rotation.y = truck.heading ?? 0;
@@ -710,7 +713,7 @@ export async function createWorld3d(opts) {
       ctx.fillRect(0, 0, size.w, size.h);
     }
     drawLabels(fitDistance / distance);
-    for (const actor of players) drawPill(actor, grow);
+    for (const actor of players) drawPill(actor, actor.grow);
     return pops;
   }
 
