@@ -1,10 +1,29 @@
 # Making the 2D/3D hills map for another town
 
 This repo shows one Grocery Bot game on the Kongsberg map, in 2D (the live game page) and 3D
-(real terrain, real buildings, a flowing river). It also has a shop window, which shows the robots
-inside a shop, and an order card, which shows what a clicked order contains. Nothing in the page code is specific to
-Kongsberg: everything town-specific lives in `data/`. To do another town, you swap in that town's
-data files and publish a copy of the repo.
+(real terrain, real buildings, forests, bridges and a flowing river). It also has a shop window,
+which shows the robots inside a shop, and an order card, which shows what a clicked order
+contains. Nothing in the page code is specific to Kongsberg: everything town-specific lives in
+`data/`. To do another town, you swap in that town's data files and publish a copy of the repo.
+
+**What's on the map:**
+- terrain from real elevation data (see Steps 4 and "Settings");
+- real buildings, with each order's house highlighted (Step 3);
+- **forests on empty land and mapped woodland, with green under them on the 2D map**
+  (Step 4b and "Forests");
+- bridges over the water ("Bridges");
+- river streaks showing the current ("How the river direction is worked out");
+- the shop window and the order card ("Shop window and order card").
+
+Agreed but not built yet: see "Planned changes".
+
+**Updates:**
+- **2026-11-21, trees:** about 18,300 forest trees (spruce and birch) on OSM forest and woodland,
+  and on empty land more than ~35 m from buildings. Fields, built-up land, parks, roads and water
+  stay clear. Green is painted under every tree on the 2D map and the 3D ground, so wooded areas
+  show in 2D too. Still 60 fps. New data step: `build_city.py landcover`. Details in "Forests".
+- **2026-11-21:** bridges; the shop window uses the v1 store animation and is bigger; order card;
+  realistic-shop and other planned changes written up.
 
 Tested so far: Kongsberg end to end. Oslo's data files build with these steps (89 of 90
 delivery homes matched a real building, terrain 0–102 m), but no Oslo page has been published
@@ -413,6 +432,9 @@ All of these are constants in `src/view3d.js`; search for the name.
 | `STREAKS` | flowing cells ÷ 6, max 1400 | How many current streaks are drawn on rivers | Very wide rivers |
 | `cells.length < 120` | | Water areas smaller than this (about 5,000 m²) get no current | Small streams that should move |
 | `SEA` | 2 m above sea level | Water lower than this is the sea or a fjord: still, and where rivers end | Rarely |
+| `FOREST_STEP` (`src/forest.js`) | `11` | Spacing of candidate forest trees (about 12 m); fewer trees when larger | Bigger or more wooded towns, to keep fps |
+| `FOREST_MAX` (`src/forest.js`) | `22000` | Most forest trees planted | Raise only after checking fps |
+| Building distance in `plantForest` | `32` units (~35 m) | Empty land closer than this to a building gets no forest | Spread-out villages (lower) or dense towns (higher) |
 
 ## Forests
 
