@@ -22,6 +22,7 @@ SEED = int(sys.argv[4]) if len(sys.argv) > 4 else 7
 sys.path.insert(0, ENGINE)
 sys.path.insert(1, RUSH)
 
+import engine.simulation as simulation                     # noqa: E402
 from engine.bots import ReferenceBot, StarterBot          # noqa: E402
 from engine.feed import from_replay                        # noqa: E402
 from engine.replay import Recorder                         # noqa: E402
@@ -38,6 +39,53 @@ LOOKS = {
 # ids sort into seat (and shop) order
 SEATS = [('p1', 'Kale Storm', ReferenceBot), ('p2', 'Oat Runner', StarterBot), ('p3', 'Rush AI', 'rush'),
          ('p4', 'Cheddar Dash', ReferenceBot), ('p5', 'Plum Pusher', StarterBot)]
+# A realistic shop: products grouped in departments with the right fixtures, instead of the
+# engine's round-robin (milk next to bread next to apples). Dairy and drinks in the fridges at the
+# back (left, far from the robots' door at the bottom right), dry goods in the middle aisle, the
+# bakery, fruit and vegetables near the door. Same shelf cells as the engine's shop, so walking
+# distances stay comparable; one cell per product at least, milk/juice/bread twice or more.
+# Blocks: shelf column x, upper (y 3-5) or lower (y 7-8). (department, fixture, products)
+LAYOUT = {
+    (3, 'upper'): ('Dairy', 'fridge', ['milk', 'milk', 'yogurt']),
+    (3, 'lower'): ('Dairy', 'fridge', ['cream', 'butter']),
+    (7, 'upper'): ('Dairy', 'fridge', ['cheese', 'eggs', 'milk']),
+    (7, 'lower'): ('Drinks', 'fridge', ['juice', 'juice']),
+    (11, 'upper'): ('Pantry', 'shelf', ['pasta', 'rice', 'sugar']),
+    (11, 'lower'): ('Breakfast', 'shelf', ['cereal', 'oats']),
+    (15, 'upper'): ('Bakery', 'rack', ['bread', 'bread', 'flour']),
+    (15, 'lower'): ('Vegetables', 'bin', ['carrots', 'onions']),
+    (19, 'upper'): ('Fruit', 'bin', ['apples', 'bananas', 'tomatoes']),
+    (19, 'lower'): ('Vegetables', 'bin', ['peppers', 'lettuce']),
+}
+_engine_make_shop = simulation.make_shop
+
+
+def realistic_shop(rules):
+    shop = _engine_make_shop(rules)
+    middle = shop['grid']['height'] // 2
+    blocks = {}
+    for item in shop['items']:
+        x, y = item['position']
+        blocks.setdefault((x, 'upper' if y < middle else 'lower'), []).append(item)
+    departments, fixtures = [], {}
+    for key, cells in blocks.items():
+        if key not in LAYOUT:
+            raise SystemExit(f'shop layout has no department for shelf block {key}; update LAYOUT')
+        name, fixture, products = LAYOUT[key]
+        cells.sort(key=lambda i: i['position'][1])
+        wanted = [p for p in products if p in rules['products']] or rules['products'][:1]
+        for n, item in enumerate(cells):
+            item['type'] = wanted[n % len(wanted)]
+            fixtures[f"{item['position'][0]},{item['position'][1]}"] = fixture
+        departments.append({'name': name, 'x': cells[0]['position'][0], 'y': cells[0]['position'][1], 'fixture': fixture})
+    missing = set(rules['products']) - {i['type'] for i in shop['items']}
+    if missing:
+        raise SystemExit(f'products without a shelf: {sorted(missing)}; update LAYOUT')
+    shop['departments'], shop['fixtures'] = departments, fixtures
+    return shop
+
+
+simulation.make_shop = realistic_shop
 ACTIONS = {'wait': 0, 'move_up': 1, 'move_down': 1, 'move_left': 1, 'move_right': 1, 'pick_up': 2, 'load': 3, 'drop_off': 3}
 
 state = create_match(seed=SEED, difficulty='medium', players=[{'id': i, 'name': n} for i, n, _ in SEATS], match_id='PREVIEW')
@@ -128,6 +176,7 @@ for oid, o in state['orders'].items():
 shop = state['shop']
 with open(os.path.join(OUT, 'shop.json'), 'w') as f:
     json.dump({'seed': SEED, 'grid': shop['grid'], 'items': [[i['position'][0], i['position'][1], products.index(i['type'])] for i in shop['items']],
+               'departments': shop.get('departments', []), 'fixtures': shop.get('fixtures', {}),
                'bays': [b['bay'] for b in shop['bays']], 'loadCells': [b['load_cells'] for b in shop['bays']], 'spawn': shop['spawn'],
                'products': products, 'botsPerPlayer': rules['bots_per_player'], 'trucksPerPlayer': rules['trucks_per_player'],
                'botCapacity': rules['bot_capacity'], 'tickSeconds': rules['tick_seconds'], 'lateStepTicks': rules['late_step_ticks'],

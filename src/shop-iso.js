@@ -59,7 +59,7 @@ export function createIsoShop(svg, layout) {
   for (const [x, y, p] of layout.items) {
     const type = layout.products[p];
     shelves[x + ',' + y] = type;
-    fixtures[x + ',' + y] = FIXTURE_OF[type] || 'shelf';
+    fixtures[x + ',' + y] = layout.fixtures?.[x + ',' + y] || FIXTURE_OF[type] || 'shelf';   // the shop's own fixtures when it has departments
   }
   const bayX = new Set(BAYS.map(([x]) => x));
   const solid = (x, y) => walls.has(x + ',' + y) || (x + ',' + y) in shelves;
@@ -159,6 +159,21 @@ export function createIsoShop(svg, layout) {
       }
     }
   }
+  // department signs (as on the v1 homepage store): one per shelf block, unless the block above
+  // in the same aisle is the same department
+  const departments = layout.departments || [];
+  departments.forEach((department, i) => {
+    const above = departments.find(o => o.x === department.x && o.y < department.y && o.name === department.name);
+    if (above) return;
+    const h = (FIXTURES[department.fixture] || FIXTURES.shelf).height;
+    const [sx, sy] = P(department.x + .5, department.y + .5, h + 14);
+    const u = Math.hypot(A, B), w = department.name.length * 6 + 12;
+    const label = el('g', { transform: `matrix(${A / u} ${B / u} 0 1 ${sx} ${sy})`, 'aria-label': department.name }, layers[W + H]);
+    el('rect', { x: -w / 2, y: -12, width: w, height: 15, rx: 1, fill: '#c8102e' }, label);
+    const text = el('text', { x: 0, y: -.5, 'text-anchor': 'middle', 'font-size': 11, 'font-family': 'Mulish, sans-serif', 'font-weight': 800, fill: '#fff' }, label);
+    text.textContent = department.name.toUpperCase();
+  });
+
   const unit = Math.hypot(A, B), [ex, ey] = P(1, signY, WALL - 7);
   const sign = el('g', { transform: `matrix(${A / unit} ${-B / unit} 0 1 ${ex} ${ey})` }, layers[Math.floor(signY)]);
   el('image', { href: 'static/assets/grocery-bot-icon.svg', width: 15, height: 15 }, sign);

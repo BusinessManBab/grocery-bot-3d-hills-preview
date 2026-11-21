@@ -1,8 +1,8 @@
 // Preview build of the live /game/CODE page (prototypes/town-rush/game-view.js) with a 3D view added.
 import { MAP_LABELS } from './game-map-labels.js';
 import { COLORS, DEFAULT_LOOK, botSvg, cleanLook, truckSvg } from './looks.js';
-import { createPanels } from './panels.js?v=16';
-import { forestPath, plantForest } from './forest.js?v=16';
+import { createPanels } from './panels.js?v=17';
+import { forestPath, plantForest } from './forest.js?v=17';
 
 const $ = id => document.getElementById(id);
 const code = 'PREVIEW';
@@ -63,7 +63,8 @@ function setMeta(meta) {
     row.style.setProperty('--seat', player.colour);
     row.innerHTML = `<span class="g-rank"></span><span class="g-face">${botSvg(player.look)}</span><span class="g-who"><strong></strong><small></small></span><span class="g-score"></span>`;
     row.querySelector('strong').textContent = player.name;
-    row.addEventListener('click', () => { play.focus = play.focus === player.seat ? null : player.seat; lastBoardTick = -1; });
+    // focus the fleet (as before) and show that player's shop in the shop window
+    row.addEventListener('click', () => { play.focus = play.focus === player.seat ? null : player.seat; lastBoardTick = -1; panels?.showShop(player.seat); });
     player.row = row;
     return row;
   }));
@@ -532,7 +533,7 @@ async function setMode(next) {
   if (next === '3d' && !world3d) {
     $('view-3d').setAttribute('aria-busy', 'true');
     await forestReady;
-    loading3d ||= import('./view3d.js?v=16').then(m => m.createWorld3d({
+    loading3d ||= import('./view3d.js?v=17').then(m => m.createWorld3d({
       host: host3d, overlay: ctx, view, town, game, play, wx, wy, truckAt, shopSign, labels: town.labels || MAP_LABELS, forest: forestSpots,
       constants: { OPEN, CLAIMED, DELIVERED, MISSED, PARKED, TRAIL, POP_TICKS, INK },
       selected: () => panels?.selectedOrder ?? null, onTap: choose, hover: pickAt,
