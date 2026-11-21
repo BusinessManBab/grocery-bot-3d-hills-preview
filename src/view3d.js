@@ -432,8 +432,22 @@ export async function createWorld3d(opts) {
           let low = Infinity;
           for (let k = i; k <= j; k++) low = Math.min(low, heightAt(samples[k].x, samples[k].z));
           const clear = low + 5.5 * M * RELIEF;
-          bridges.push({ ax: a.x, az: a.z, bx: b.x, bz: b.z, length, half: HALF[kind], kind, low,
-            deckA: Math.max(heightAt(a.x, a.z), clear), deckB: Math.max(heightAt(b.x, b.z), clear) });
+          const br = { ax: a.x, az: a.z, bx: b.x, bz: b.z, length, half: HALF[kind], kind, low,
+            deckA: Math.max(heightAt(a.x, a.z), clear), deckB: Math.max(heightAt(b.x, b.z), clear) };
+          // the two carriageways of one road are two lines: make them one wider deck
+          const twin = bridges.find(o => {
+            const mx = (o.ax + o.bx) / 2 - (br.ax + br.bx) / 2, mz = (o.az + o.bz) / 2 - (br.az + br.bz) / 2;
+            const dot = ((o.bx - o.ax) * (br.bx - br.ax) + (o.bz - o.az) * (br.bz - br.az)) / (o.length * br.length);
+            return Math.hypot(mx, mz) < 24 && Math.abs(dot) > .9;
+          });
+          if (twin) {
+            const flip = (twin.bx - twin.ax) * (br.bx - br.ax) + (twin.bz - twin.az) * (br.bz - br.az) < 0;
+            const [px, pz, qx, qz] = flip ? [br.bx, br.bz, br.ax, br.az] : [br.ax, br.az, br.bx, br.bz];
+            const gap = Math.abs(((px + qx) / 2 - (twin.ax + twin.bx) / 2) * -(twin.bz - twin.az) + ((pz + qz) / 2 - (twin.az + twin.bz) / 2) * (twin.bx - twin.ax)) / twin.length;
+            Object.assign(twin, { ax: (twin.ax + px) / 2, az: (twin.az + pz) / 2, bx: (twin.bx + qx) / 2, bz: (twin.bz + qz) / 2,
+              half: Math.max(twin.half, br.half) + gap / 2, low: Math.min(twin.low, br.low), deckA: Math.max(twin.deckA, flip ? br.deckB : br.deckA), deckB: Math.max(twin.deckB, flip ? br.deckA : br.deckB) });
+            twin.length = Math.hypot(twin.bx - twin.ax, twin.bz - twin.az);
+          } else bridges.push(br);
         }
         i = j;
       }
@@ -496,7 +510,7 @@ export async function createWorld3d(opts) {
       geo.computeVertexNormals();
       const mesh = new THREE.Mesh(geo, mat);
       mesh.castShadow = mesh.receiveShadow = true;
-      mesh.renderOrder = 19;
+      mesh.renderOrder = 1;          // before the roads (2-6), which then lie on the deck
       scene.add(mesh);
     }
   }

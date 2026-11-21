@@ -2,7 +2,7 @@
 // order card (left: what a clicked order is, how long ago, how happy). Both read data/shop.json
 // and data/shop.bin, recorded from the engine alongside the public feed (tools/simulate_match.py).
 import { botSvg } from './looks.js';
-import { createIsoShop } from './shop-iso.js?v=11';
+import { createIsoShop } from './shop-iso.js?v=12';
 
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -47,7 +47,12 @@ export async function createPanels({ game, play, you }) {
     $('shop-face').innerHTML = botSvg(player.look);
     iso.setPlayer(player);
     trucks = truckTimeline(seat);
+    fitBoard();
   }
+
+  // keep the standings above the (now bigger) shop window
+  function fitBoard() { requestAnimationFrame(() => document.body.style.setProperty('--shop-h', win.offsetHeight + 'px')); }
+  addEventListener('resize', () => { if (state.open) fitBoard(); });
 
   function closeShop() {
     state.open = false;
