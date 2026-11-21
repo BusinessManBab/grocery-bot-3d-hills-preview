@@ -7,6 +7,7 @@ import { MapControls } from 'three/addons/controls/MapControls.js';
 import { SVGLoader } from 'three/addons/loaders/SVGLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { forestPath } from './forest.js';
+import { createBuildings } from './buildings3d.js?v=15';
 import { COLORS, HEADS, INK as TRUCK_INK, SHELL, EDGE, WOOD, LAMP, mix, light, face } from './looks.js';
 
 const M = 1 / 1.113;              // world units per metre (one unit is 1e-5 degree of latitude)
@@ -195,64 +196,36 @@ export async function createWorld3d(opts) {
 
   // ---- buildings ------------------------------------------------------------------
   // Footprint ring in 1e5-degree ints -> extruded prism (walls + flat roof), as non-indexed triangles.
-  // On a slope the walls start below the lowest corner and the roof sits above the highest one.
-  function prism(ring, height, out) {
-    const pts = [];
-    for (let i = 0; i < ring.length; i += 2) pts.push(new THREE.Vector2(wx(ring[i]), wy(ring[i + 1])));
-    if (THREE.ShapeUtils.isClockWise(pts)) pts.reverse();
-    let lo = Infinity, hi = -Infinity;
-    for (const p of pts) { const h = heightAt(p.x, p.y); lo = Math.min(lo, h); hi = Math.max(hi, h); }
-    const foot = lo - 1.5, top = hi + height;
-    const walls = [], roof = [];
-    for (let i = 0; i < pts.length; i++) {
-      const a = pts[i], b = pts[(i + 1) % pts.length];
-      walls.push(a.x, foot, a.y, a.x, top, a.y, b.x, top, b.y, a.x, foot, a.y, b.x, top, b.y, b.x, foot, b.y);
-    }
-    for (const [i, j, k] of THREE.ShapeUtils.triangulateShape(pts, [])) {
-      for (const n of [i, k, j]) roof.push(pts[n].x, top, pts[n].y);
-    }
-    out.walls.push(...walls);
-    out.roof.push(...roof);
-    return { pts, top };
-  }
-
-  function prismGeometry(parts, withGroups) {
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute([...parts.walls, ...parts.roof], 3));
-    geo.computeVertexNormals();
-    if (withGroups) {
-      geo.addGroup(0, parts.walls.length / 3, 0);
-      geo.addGroup(parts.walls.length / 3, parts.roof.length / 3, 1);
-    }
-    return geo;
-  }
-
   // Context town: every other mapped building in the bounds, pale so the order homes stand out.
   // Buildings under a shop (often the real store) make way for the shop model, as on the 2D map.
   const PLAZA = 100;
   const nearShop = (x, z, r = PLAZA) => game.players.some(p => Math.hypot(p.shop[0] - x, p.shop[1] - z) < r);
+  // Cartoon buildings (src/buildings3d.js): styled by OSM type, merged into one mesh per facade
+  // style plus one for roofs and trim.
+  const cartoon = createBuildings({ heightAt, wx, wy, M, LIFT });
+  const trimMat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+  let buildingVertices = 0;
   {
-    const parts = { walls: [], roof: [] };
-    for (const b of extra.buildings) {
+    const out = { walls: {}, trim: cartoon.bucket() };
+    extra.buildings.forEach((b, i) => {
       let hit = false;
-      for (let i = 1; i < b.length && !hit; i += 2) hit = nearShop(wx(b[i]), wy(b[i + 1]));
-      if (hit) continue;
-      const h = b[0] * M * LIFT;
-      prism(b.slice(1), h, parts);
-    }
-    const mesh = new THREE.Mesh(prismGeometry(parts, false), litBoth(PALETTE.town));
-    mesh.castShadow = mesh.receiveShadow = true;
-    mesh.renderOrder = 20;
-    scene.add(mesh);
+      for (let k = 1; k < b.length && !hit; k += 2) hit = nearShop(wx(b[k]), wy(b[k + 1]));
+      if (!hit) cartoon.build(b.slice(1), b[0], extra.info?.[i], i, out);
+    });
+    const meshes = Object.entries(out.walls).map(([style, b]) => new THREE.Mesh(cartoon.geometry(b), new THREE.MeshLambertMaterial({ map: cartoon.textures[style], vertexColors: true, side: THREE.DoubleSide })));
+    meshes.push(new THREE.Mesh(cartoon.geometry(out.trim), trimMat));
+    for (const mesh of meshes) { mesh.castShadow = mesh.receiveShadow = true; mesh.renderOrder = 20; scene.add(mesh); buildingVertices += mesh.geometry.attributes.position.count; }
   }
 
   // Order homes: the real footprint at each address the game delivers to.
   const homes = extra.homes.map((home, i) => {
-    const parts = { walls: [], roof: [] };
-    const height = Math.max(7, home.h) * M * LIFT;
-    const { pts, top } = prism(home.ring, height, parts);
-    const wall = litBoth(PALETTE.homeWall), roof = litBoth(PALETTE.home);
-    const mesh = new THREE.Mesh(prismGeometry(parts, true), [wall, roof]);
+    // same cartoon style, but walls and roof in their own white buckets so these materials colour them
+    const out = { walls: {}, roof: cartoon.bucket(), trim: cartoon.bucket(), plain: true };
+    const { pts, top } = cartoon.build(home.ring, Math.max(7, home.h), home.info || ['house'], 100000 + i, out);
+    const wall = new THREE.MeshLambertMaterial({ color: PALETTE.homeWall, map: cartoon.textures[out.style], vertexColors: true, side: THREE.DoubleSide });
+    const roof = new THREE.MeshLambertMaterial({ color: PALETTE.home, vertexColors: true, side: THREE.DoubleSide });
+    const mesh = new THREE.Mesh(cartoon.geometry(out.walls[out.style], out.roof, out.trim), [wall, roof, trimMat]);
+    buildingVertices += mesh.geometry.attributes.position.count;
     mesh.castShadow = mesh.receiveShadow = true;
     mesh.renderOrder = 21;
     scene.add(mesh);
@@ -1135,5 +1108,5 @@ export async function createWorld3d(opts) {
   resize();
   pose(home().target, fitDistance, TILT, 0);
   const flowAt = (x, z) => { const i = cellOf(x, z); return i < 0 || !flowSpeed[i] ? null : [flowX[i], flowZ[i], flowSpeed[i]]; };
-  return { render, setActive, flyHome: () => flyTo(home()), camera, controls, scene, renderer, flowAt, streaks: STREAKS, bridges, forest: forest.length, get picks() { return picks; } };
+  return { render, setActive, flyHome: () => flyTo(home()), camera, controls, scene, renderer, flowAt, streaks: STREAKS, bridges, forest: forest.length, get buildingVertices() { return buildingVertices; }, get picks() { return picks; } };
 }
