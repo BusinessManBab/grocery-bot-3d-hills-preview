@@ -141,16 +141,18 @@ export async function createWorld3d(opts) {
     ['lane', 2.2, PALETTE.lane], ['street', 7.5, PALETTE.streetCase], ['major', 11, PALETTE.majorCase],
     ['street', 5, PALETTE.street], ['major', 8.2, PALETTE.major],
   ];
-  roadLayers.forEach(([kind, half, colour], i) => {
-    const mesh = new THREE.Mesh(ribbons(town.roads[kind], half, .5 + i * .05), draped(colour));
-    mesh.receiveShadow = true;
-    mesh.renderOrder = 2 + i;
-    scene.add(mesh);
-  });
+  function buildRoads() {
+    roadLayers.forEach(([kind, half, colour], i) => {
+      const mesh = new THREE.Mesh(ribbons(town.roads[kind], half, .5 + i * .05), draped(colour));
+      mesh.receiveShadow = true;
+      mesh.renderOrder = 2 + i;
+      scene.add(mesh);
+    });
+  }
 
   // Ribbons cut into short pieces so they follow the ground instead of bridging dips.
   function ribbons(lines, half, lift, pos = []) {
-    const y = (x, z) => heightAt(x, z) + lift;
+    const y = (x, z) => roadY(x, z) + lift;
     const disc = (x, z) => {
       const n = 10, cy = y(x, z);
       for (let i = 0; i < n; i++) {
@@ -402,6 +404,103 @@ export async function createWorld3d(opts) {
       flowSpeed[i] = clamp(1 + drop * 22, 1, 4);
     }
   }
+
+  // ---- bridges: where a road crosses water it runs on a straight deck between the banks ----
+  // Each road line is sampled every 3 units; a run of water samples becomes a bridge from just
+  // before it to just after it. The deck stays clear of the water, ramps onto the banks, and gets a
+  // slab, railings with posts and a pier or two. Roads, trucks and trails use roadY, so they cross on it.
+  const bridges = [];
+  {
+    const HALF = { major: 11, street: 7.5, lane: 3 };
+    for (const kind of ['major', 'street', 'lane']) for (const line of town.roads[kind]) {
+      const samples = [];
+      for (let i = 2; i < line.length; i += 2) {
+        const ax = wx(line[i - 2]), az = wy(line[i - 1]), bx = wx(line[i]), bz = wy(line[i + 1]);
+        const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 3));
+        for (let k = i === 2 ? 0 : 1; k <= n; k++) {
+          const x = ax + (bx - ax) * k / n, z = az + (bz - az) * k / n;
+          samples.push({ x, z, wet: isWater(x, z) });
+        }
+      }
+      for (let i = 0; i < samples.length; i++) {
+        if (!samples[i].wet) continue;
+        let j = i;
+        while (j + 1 < samples.length && (samples[j + 1].wet || (j + 2 < samples.length && samples[j + 2].wet))) j++;
+        const a = samples[Math.max(0, i - 2)], b = samples[Math.min(samples.length - 1, j + 2)];
+        const length = Math.hypot(b.x - a.x, b.z - a.z);
+        if (length >= 10 && length <= 320) {
+          let low = Infinity;
+          for (let k = i; k <= j; k++) low = Math.min(low, heightAt(samples[k].x, samples[k].z));
+          const clear = low + 5.5 * M * RELIEF;
+          bridges.push({ ax: a.x, az: a.z, bx: b.x, bz: b.z, length, half: HALF[kind], kind, low,
+            deckA: Math.max(heightAt(a.x, a.z), clear), deckB: Math.max(heightAt(b.x, b.z), clear) });
+        }
+        i = j;
+      }
+    }
+  }
+  const RAMP = 26;
+  function deckAt(x, z) {
+    let best = -Infinity;
+    for (const br of bridges) {
+      const dx = br.bx - br.ax, dz = br.bz - br.az, t = ((x - br.ax) * dx + (z - br.az) * dz) / (br.length * br.length);
+      const side = Math.abs((x - br.ax) * dz - (z - br.az) * dx) / br.length;
+      if (side > br.half + 3) continue;
+      const along = t * br.length;
+      let h;
+      if (t >= 0 && t <= 1) h = br.deckA + (br.deckB - br.deckA) * t;
+      else if (along < 0 && along > -RAMP) { const u = 1 + along / RAMP; h = heightAt(x, z) + (br.deckA - heightAt(x, z)) * u * u * (3 - 2 * u); }
+      else if (along > br.length && along < br.length + RAMP) { const u = 1 - (along - br.length) / RAMP; h = heightAt(x, z) + (br.deckB - heightAt(x, z)) * u * u * (3 - 2 * u); }
+      else continue;
+      if (h > best) best = h;
+    }
+    return best;
+  }
+  function roadY(x, z) { return Math.max(heightAt(x, z), deckAt(x, z)); }
+  {
+    const deckMat = lit('#d9d1c3'), railMat = lit('#f4efe6'), postMat = lit('#9a8b78'), pierMat = lit('#c3b9aa');
+    const parts = { deck: [], rail: [], post: [], pier: [] };
+    // a straight beam between two points, with its own heights at each end (a sloped box)
+    const beam = (out, ax, az, bx, bz, width, ya, yb, depth) => {
+      const len = Math.hypot(bx - ax, bz - az) || 1, nx = -(bz - az) / len * width / 2, nz = (bx - ax) / len * width / 2;
+      const c = [[ax + nx, az + nz, ya], [bx + nx, bz + nz, yb], [bx - nx, bz - nz, yb], [ax - nx, az - nz, ya]];
+      const top = c.map(([x, z, y]) => [x, y, z]), bot = c.map(([x, z, y]) => [x, y - depth, z]);
+      const quad = (p, q, r, t) => out.push(...p, ...q, ...r, ...p, ...r, ...t);
+      quad(top[0], top[1], top[2], top[3]); quad(bot[3], bot[2], bot[1], bot[0]);
+      for (let k = 0; k < 4; k++) quad(top[k], bot[k], bot[(k + 1) % 4], top[(k + 1) % 4]);
+    };
+    for (const br of bridges) {
+      const dx = (br.bx - br.ax) / br.length, dz = (br.bz - br.az) / br.length, nx = -dz, nz = dx;
+      const w = br.half * 2 + 2.5, edge = br.half + .9, railH = br.kind === 'lane' ? 2.4 : 2.8;
+      beam(parts.deck, br.ax, br.az, br.bx, br.bz, w, br.deckA + .2, br.deckB + .2, 2.4);
+      for (const sgn of [-1, 1]) {
+        const ox = nx * edge * sgn, oz = nz * edge * sgn;
+        beam(parts.rail, br.ax + ox, br.az + oz, br.bx + ox, br.bz + oz, .6, br.deckA + railH, br.deckB + railH, .6);
+        const posts = Math.max(2, Math.round(br.length / 9));
+        for (let k = 0; k <= posts; k++) {
+          const t = k / posts, x = br.ax + (br.bx - br.ax) * t + ox, z = br.az + (br.bz - br.az) * t + oz, y = br.deckA + (br.deckB - br.deckA) * t;
+          beam(parts.post, x - dx * .35, z - dz * .35, x + dx * .35, z + dz * .35, .7, y + railH, y + railH, railH);
+        }
+      }
+      // piers down to the water, one per ~45 units of span
+      const piers = Math.floor(br.length / 45);
+      for (let k = 1; k <= piers; k++) {
+        const t = k / (piers + 1), x = br.ax + (br.bx - br.ax) * t, z = br.az + (br.bz - br.az) * t, y = br.deckA + (br.deckB - br.deckA) * t - 2.2;
+        beam(parts.pier, x - dx * 1.6, z - dz * 1.6, x + dx * 1.6, z + dz * 1.6, w * .7, y, y, y - br.low + 3);
+      }
+    }
+    for (const [key, mat] of [['deck', deckMat], ['rail', railMat], ['post', postMat], ['pier', pierMat]]) {
+      if (!parts[key].length) continue;
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(parts[key], 3));
+      geo.computeVertexNormals();
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.castShadow = mesh.receiveShadow = true;
+      mesh.renderOrder = 19;
+      scene.add(mesh);
+    }
+  }
+  buildRoads();
 
   // Current: short streaks drifting downstream, bright at the head and fading to the tail.
   const STREAKS = Math.min(1400, Math.round(flowing.length / 6));
@@ -916,7 +1015,7 @@ export async function createWorld3d(opts) {
         const grow = growAt(now.x, now.y);
         truck.obj.visible = true;
         const heading = truck.heading ?? 0, reach = 144 * TRUCK_SCALE * grow * .45, hx = Math.cos(heading) * reach, hz = -Math.sin(heading) * reach;
-        const front = heightAt(now.x + hx, now.y + hz), back = heightAt(now.x - hx, now.y - hz);
+        const front = roadY(now.x + hx, now.y + hz), back = roadY(now.x - hx, now.y - hz);
         truck.obj.position.set(now.x, (front + back) / 2 + Math.abs(Math.sin(time * 9 + t * 2 + player.seat)) * .6 * grow, now.y);
         truck.obj.rotation.set(0, heading, Math.atan2(front - back, reach * 2));
         truck.obj.scale.setScalar(TRUCK_SCALE * grow);
@@ -928,7 +1027,7 @@ export async function createWorld3d(opts) {
           const x = wx(list[i]), z = wy(list[i + 1]), len = Math.hypot(x - px, z - pz);
           const alpha = (dim < 1 ? .12 : .55) * (1 - (back + k) / TRAIL);
           if (len > .01) {
-            const pieces = strip(trail.pos, px, pz, x, z, 3.4 * grow, (vx, vz) => heightAt(vx, vz) + 1);
+            const pieces = strip(trail.pos, px, pz, x, z, 3.4 * grow, (vx, vz) => roadY(vx, vz) + 1);
             for (let v = 0; v < pieces * 6; v++) trail.col.push(colour.r, colour.g, colour.b, alpha);
           }
           px = x; pz = z;
@@ -995,5 +1094,5 @@ export async function createWorld3d(opts) {
   resize();
   pose(home().target, fitDistance, TILT, 0);
   const flowAt = (x, z) => { const i = cellOf(x, z); return i < 0 || !flowSpeed[i] ? null : [flowX[i], flowZ[i], flowSpeed[i]]; };
-  return { render, setActive, flyHome: () => flyTo(home()), camera, controls, scene, renderer, flowAt, streaks: STREAKS, get picks() { return picks; } };
+  return { render, setActive, flyHome: () => flyTo(home()), camera, controls, scene, renderer, flowAt, streaks: STREAKS, bridges, get picks() { return picks; } };
 }

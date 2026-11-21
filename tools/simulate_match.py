@@ -8,6 +8,8 @@ StarterBots. Outputs:
   game.json   the public feed (engine.feed.from_replay, exactly what /api/games serves) + looks
   shop.json   the shop floor layout, rules, and every order's items/address/timeline
   (game.json also gets meta.you, the seat whose shop opens as "Your shop")
+  shop.json   also truckLoads[seat][truck] = [[tick, item indexes, "0110" loaded flags]] whenever
+              the items queued on that truck or their loading change
   shop.bin    per tick, per seat: 20 robots x [x, y, action, item1, item2, item3] and
               5 trucks x [items loaded, items needed] for the orders queued on that truck
 """
@@ -47,6 +49,23 @@ products = state['rules']['products']
 order_seat = {pid: i for i, (pid, _, _) in enumerate(SEATS)}
 frames = bytearray()
 history = {}          # order id -> [[tick, status, seat]]
+truck_loads = [[[] for _ in range(5)] for _ in SEATS]   # seat -> truck -> [[tick, item indexes, loaded "0101"]] on change
+
+
+def load_of(truck):
+    """The items queued on a docked truck, in order, and which of them robots have loaded."""
+    items, done = [], ''
+    for oid in truck['queue']:
+        order = state['orders'].get(oid)
+        if not order:
+            continue
+        left = list(order['items_delivered'])
+        for item in order['items_required']:
+            items.append(products.index(item))
+            done += '1' if item in left else '0'
+            if item in left:
+                left.remove(item)
+    return items, done
 
 
 def capture():
@@ -55,7 +74,11 @@ def capture():
         for bot in player['bots']:
             inv = [products.index(t) + 1 for t in bot['inventory']][:3]
             frames.extend([bot['position'][0], bot['position'][1], ACTIONS.get(bot['last_action'], 0), *(inv + [0] * (3 - len(inv)))])
-        for truck in player['trucks']:
+        for t, truck in enumerate(player['trucks']):
+            items, done = load_of(truck)
+            log = truck_loads[order_seat[pid]][t]
+            if not log or log[-1][1] != items or log[-1][2] != done:
+                log.append([state['tick'], items, done])
             queued = [state['orders'][o] for o in truck['queue'] if o in state['orders']]
             loaded = sum(len(o['items_delivered']) for o in queued)
             needed = sum(len(o['items_required']) for o in queued)
@@ -109,7 +132,7 @@ with open(os.path.join(OUT, 'shop.json'), 'w') as f:
                'products': products, 'botsPerPlayer': rules['bots_per_player'], 'trucksPerPlayer': rules['trucks_per_player'],
                'botCapacity': rules['bot_capacity'], 'tickSeconds': rules['tick_seconds'], 'lateStepTicks': rules['late_step_ticks'],
                'lateStepPercent': rules['late_step_percent'], 'seats': len(SEATS), 'frameBytes': rules['bots_per_player'] * 6 + rules['trucks_per_player'] * 2,
-               'ticks': state['tick'] + 1, 'orders': orders}, f, separators=(',', ':'))
+               'ticks': state['tick'] + 1, 'truckLoads': truck_loads, 'orders': orders}, f, separators=(',', ':'))
 with open(os.path.join(OUT, 'shop.bin'), 'wb') as f:
     f.write(bytes(frames))
 print('final', {p['name']: (p['score'], p['delivered']) for p in state['players'].values()}, 'bin', len(frames))

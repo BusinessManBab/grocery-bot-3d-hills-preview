@@ -1,19 +1,20 @@
 // The shop window (bottom right: robots picking and loading inside one player's shop) and the
 // order card (left: what a clicked order is, how long ago, how happy). Both read data/shop.json
 // and data/shop.bin, recorded from the engine alongside the public feed (tools/simulate_match.py).
-import { botSvg, truckSvg } from './looks.js';
+import { botSvg } from './looks.js';
+import { createIsoShop } from './shop-iso.js?v=11';
 
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const PARKED = 4;
-const WALL = '#583a2d', FLOOR = '#fbf6ea', TILE = '#f1e9d6', SHELF = '#d9c3a0', INK = '#171412';
 // One colour per product, for shelves, carried items and the order card.
 const PRODUCT_COLOURS = {
   milk: '#7fb2e5', bread: '#c98f4f', apples: '#d6453d', pasta: '#e8c547', butter: '#f2d675', flour: '#cfc6b8', bananas: '#f1d02e',
   rice: '#b9b1a4', yogurt: '#9fc7d9', oats: '#b48a5a', tomatoes: '#e0533a', cereal: '#e39a3b', cheese: '#f0b429', eggs: '#e9d8b4',
   carrots: '#ef7d2d', juice: '#f59f2a', cream: '#c7d7e6', onions: '#a86a9b', peppers: '#4f9d4a', lettuce: '#7cbf4f', sugar: '#d9d2e8',
 };
-const productColour = name => PRODUCT_COLOURS[name] || '#a99';
+// the v1 goods palette (GroceryBot.GOODS) so the card matches the baskets and shelves in the shop window
+const productColour = name => window.GroceryBot?.GOODS?.[name] || PRODUCT_COLOURS[name] || '#a99';
 const STATUS = {
   open: 'Open: waiting for a shop to claim it', claimed: 'Claimed', delivering: 'On the way', delivered: 'Delivered',
   expired: 'Expired: no shop claimed it in time', undelivered: 'Not delivered before the day ended',
@@ -26,31 +27,26 @@ export async function createPanels({ game, play, you }) {
   ]).catch(() => [null, null]);
   if (!data || !bin) return null;               // towns without recorded shop data: no panels
   const frames = new Uint8Array(bin);
-  const shelf = new Map(data.items.map(([x, y, p]) => [x + ',' + y, p]));
-  const sprites = game.players.map(player => ({ bot: image(botSvg(player.look), 36, 43), truck: image(truckSvg(player.look), 170, 122) }));
   const state = { seat: you ?? null, open: false, order: null, lastCard: '' };
 
-  function image(svg, w, h) {
-    const img = new Image();
-    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg.replace('<svg ', `<svg width="${w * 2}" height="${h * 2}" `));
-    return img;
-  }
-
-  // ---- shop window -------------------------------------------------------------
-  const win = $('shopwin'), canvas = $('shop-canvas'), g = canvas.getContext('2d');
+  // ---- shop window: the v1 store animation (shop-iso.js), driven by the recorded match ----
+  const win = $('shopwin'), iso = createIsoShop($('shop-svg'), data);
   $('shop-close').addEventListener('click', () => closeShop());
+  let trucks = [];                                // per bay: per tick {state, since, back}
 
   function showShop(seat) {
     if (!game.players[seat]) return;
     state.seat = seat;
     state.open = true;
+    state.footKey = '';
     const player = game.players[seat];
     win.hidden = false;
     document.body.classList.add('has-shop');
     win.style.setProperty('--seat', player.colour);
     $('shop-title').textContent = seat === you ? 'Your shop' : `${player.name}'s shop`;
     $('shop-face').innerHTML = botSvg(player.look);
-    sizeCanvas();
+    iso.setPlayer(player);
+    trucks = truckTimeline(seat);
   }
 
   function closeShop() {
@@ -59,148 +55,74 @@ export async function createPanels({ game, play, you }) {
     document.body.classList.remove('has-shop');
   }
 
-  let size = { w: 0, h: 0, cell: 10, dpr: 1 };
-  function sizeCanvas() {
-    const w = canvas.clientWidth || 320, cell = Math.floor(w / data.grid.width), truckRow = Math.round(cell * 2.2);
-    const h = truckRow + cell * data.grid.height;
-    size = { w, h, cell, truckRow, dpr: Math.min(2, devicePixelRatio || 1), ox: Math.floor((w - cell * data.grid.width) / 2) };
-    canvas.style.height = h + 'px';
-    canvas.width = Math.round(w * size.dpr);
-    canvas.height = Math.round(h * size.dpr);
+  // When each truck is home, leaving (home now, gone next tick) or away, how long since it left
+  // and how long until it is back: what arena.js needs to back trucks in and out of the bays.
+  function truckTimeline(seat) {
+    const T = game.frames.length, { DOCKED, LEAVING, AWAY } = iso.states;
+    return data.bays.map((_, bay) => {
+      const home = game.frames.map(frame => frame.p[seat][4][bay * 3 + 2] < PARKED);
+      const out = new Array(T);
+      let left = 0;
+      for (let t = 0; t < T; t++) {
+        const st = home[t] ? (t + 1 < T && !home[t + 1] ? LEAVING : DOCKED) : AWAY;
+        if (st === LEAVING) left = t;
+        out[t] = { state: st, since: st === DOCKED ? 0 : t - left };
+      }
+      let back = T + 100;
+      for (let t = T - 1; t >= 0; t--) {
+        if (home[t] && out[t].state === DOCKED) back = t;
+        out[t].back = back - t;
+      }
+      return out;
+    });
   }
-  addEventListener('resize', () => { if (state.open) sizeCanvas(); });
+
+  // The items queued on a bay's truck at a tick and which are loaded (truckLoads change log).
+  function loadAt(seat, bay, tick) {
+    const log = data.truckLoads?.[seat]?.[bay] || [];
+    let entry = null;
+    for (const e of log) { if (e[0] > tick) break; entry = e; }
+    return entry ? { order: entry[1].map(p => data.products[p]), mask: entry[2] } : { order: [], mask: '' };
+  }
 
   // byte layout per tick and seat: robots x [x, y, action, item1+1, item2+1, item3+1], trucks x [loaded, needed]
   const at = (tick, seat) => (clamp(tick, 0, data.ticks - 1) * data.seats + seat) * data.frameBytes;
+  const EVENTS = ['wait', 'move', 'pick', 'drop'];
+  const itemsAt = i => [frames[i + 3], frames[i + 4], frames[i + 5]].filter(Boolean).map(p => data.products[p - 1]);
 
-  function drawShop(index, k, frameA, time) {
-    const { cell, ox, truckRow, dpr } = size, seat = state.seat, player = game.players[seat];
-    const W = data.grid.width, H = data.grid.height, X = x => ox + x * cell, Y = y => truckRow + y * cell;
-    g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    g.clearRect(0, 0, size.w, size.h);
-    // floor, walls, loading cells
-    g.fillStyle = FLOOR;
-    g.fillRect(X(0), Y(0), W * cell, H * cell);
-    g.fillStyle = TILE;
-    for (let y = 1; y < H - 1; y++) for (let x = 1 + (y % 2); x < W - 1; x += 2) g.fillRect(X(x), Y(y), cell, cell);
-    g.fillStyle = player.colour;
-    g.globalAlpha = .18;
-    for (const cells of data.loadCells) for (const [x, y] of cells) g.fillRect(X(x), Y(y), cell, cell);
-    g.globalAlpha = 1;
-    g.fillStyle = WALL;
-    g.fillRect(X(0), Y(0), W * cell, cell * .55);
-    g.fillRect(X(0), Y(H) - cell * .55, W * cell, cell * .55);
-    g.fillRect(X(0), Y(0), cell * .55, H * cell);
-    g.fillRect(X(W) - cell * .55, Y(0), cell * .55, H * cell);
-    // bays: doors in the top wall, the truck parked outside when it is home
-    const trucks = frameA.p[seat][4], o = at(index, seat), base = o + data.botsPerPlayer * 6;
-    data.bays.forEach(([bx], t) => {
-      g.fillStyle = FLOOR;
-      g.fillRect(X(bx - 1) + 2, Y(0), cell * 3 - 4, cell * .55);
-      const docked = trucks[t * 3 + 2] < PARKED, cx = X(bx) + cell / 2;
-      if (docked && sprites[seat].truck.complete) {
-        const tw = cell * 3.1, th = tw * 122 / 170;
-        g.drawImage(sprites[seat].truck, cx - tw * .52, truckRow - th * .95, tw, th);
-        const loaded = frames[base + t * 2], needed = frames[base + t * 2 + 1];
-        if (needed) {
-          g.fillStyle = 'rgba(23,20,18,.15)';
-          g.fillRect(cx - cell * 1.2, truckRow - 3, cell * 2.4, 3);
-          g.fillStyle = player.colour;
-          g.fillRect(cx - cell * 1.2, truckRow - 3, cell * 2.4 * Math.min(1, loaded / needed), 3);
-        }
-      } else {
-        g.strokeStyle = 'rgba(88,58,45,.35)';
-        g.setLineDash([3, 3]);
-        g.strokeRect(cx - cell * 1.3, truckRow - cell * 1.6, cell * 2.6, cell * 1.3);
-        g.setLineDash([]);
-        g.fillStyle = 'rgba(88,58,45,.55)';
-        g.font = `700 ${Math.max(8, cell * .62)}px Mulish, Arial, sans-serif`;
-        g.textAlign = 'center';
-        g.textBaseline = 'middle';
-        g.fillText('out', cx, truckRow - cell * .95);
-      }
+  // Which way a robot looks: its last move (arena.js keeps facing between moves).
+  function facing(seat, bot, index) {
+    for (let r = index; r >= Math.max(0, index - 40); r--) {
+      const i = at(r, seat) + bot * 6, j = at(r + 1, seat) + bot * 6;
+      const dx = frames[j] - frames[i], dy = frames[j + 1] - frames[i + 1];
+      if (dx > 0) return { gaze: 1, back: false };
+      if (dy > 0) return { gaze: -1, back: false };
+      if (dx < 0 || dy < 0) return { gaze: 0, back: true };
+    }
+    return { gaze: 0, back: false };
+  }
+
+  function drawShop(index, k, time) {
+    const seat = state.seat, o = at(index, seat), n = at(index + 1, seat), bots = [];
+    for (let b = 0; b < data.botsPerPlayer; b++) {
+      const i = o + b * 6, j = n + b * 6;
+      const moved = frames[i] !== frames[j] || frames[i + 1] !== frames[j + 1];
+      bots.push({ x0: frames[i], y0: frames[i + 1], x1: frames[j], y1: frames[j + 1], event: moved ? 'move' : EVENTS[frames[j + 2]] === 'move' ? 'wait' : EVENTS[frames[j + 2]],
+        items0: itemsAt(i), items1: itemsAt(j), face: facing(seat, b, index) });
+    }
+    const truckStates = data.bays.map((_, bay) => {
+      const line = trucks[bay], t0 = clamp(index, 0, line.length - 1), t1 = clamp(index + 1, 0, line.length - 1);
+      return { now: { ...line[t0], ...loadAt(seat, bay, t0) }, next: { ...line[t1], ...loadAt(seat, bay, t1) } };
     });
-    // shelves with their product
-    g.font = `800 ${Math.max(7, cell * .5)}px Mulish, Arial, sans-serif`;
-    g.textAlign = 'center';
-    g.textBaseline = 'middle';
-    for (const [x, y, p] of data.items) {
-      g.fillStyle = SHELF;
-      g.fillRect(X(x) + .5, Y(y) + .5, cell - 1, cell - 1);
-      g.fillStyle = productColour(data.products[p]);
-      g.fillRect(X(x) + 2, Y(y) + 2, cell - 4, cell - 4);
-      g.fillStyle = 'rgba(23,20,18,.75)';
-      g.fillText(data.products[p].slice(0, 2), X(x) + cell / 2, Y(y) + cell / 2 + .5);
-    }
-    // robots, eased from one tick to the next, with what they carry
-    const next = at(index + 1, seat), crowd = new Map();
-    for (let b = 0; b < data.botsPerPlayer; b++) {
-      const i = o + b * 6, j = next + b * 6, key = frames[j] + ',' + frames[j + 1];
-      crowd.set(key, (crowd.get(key) || 0) + 1);
-    }
-    const seen = new Map(), bots = [];
-    for (let b = 0; b < data.botsPerPlayer; b++) {
-      const i = o + b * 6, j = next + b * 6;
-      const key = frames[j] + ',' + frames[j + 1], n = seen.get(key) || 0, many = crowd.get(key);
-      seen.set(key, n + 1);
-      // several robots waiting on one cell (the start cell) fan out a little
-      const fan = many > 1 ? [((n % 5) - 2) * cell * .18, (Math.floor(n / 5) - 1.5) * cell * .16] : [0, 0];
-      const x = X(frames[i] + (frames[j] - frames[i]) * k) + cell / 2 + fan[0], y = Y(frames[i + 1] + (frames[j + 1] - frames[i + 1]) * k) + cell / 2 + fan[1];
-      bots.push({ x, y, action: frames[j + 2], items: [frames[j + 3], frames[j + 4], frames[j + 5]], cellX: frames[j], cellY: frames[j + 1] });
-    }
-    bots.sort((p, q) => p.y - q.y);
-    const bw = cell * 1.25, bh = bw * 43 / 36;
-    for (const bot of bots) {
-      if (bot.action === 2) spark(bot, X, Y, k);                 // picking from the shelf next to it
-      if (bot.action === 3) loadArrow(bot, k, player.colour);    // loading into the truck above
-      if (sprites[seat].bot.complete) g.drawImage(sprites[seat].bot, bot.x - bw / 2, bot.y - bh * .78, bw, bh);
-      bot.items.forEach((item, n) => {
-        if (!item) return;
-        g.beginPath();
-        g.arc(bot.x - cell * .3 + n * cell * .3, bot.y - bh * .82, Math.max(1.8, cell * .14), 0, 7);
-        g.fillStyle = productColour(data.products[item - 1]);
-        g.fill();
-        g.lineWidth = 1;
-        g.strokeStyle = '#fff';
-        g.stroke();
-      });
-    }
+    iso.draw(bots, truckStates, k, time * 1000);
     return bots;
-  }
-
-  function spark(bot, X, Y, k) {
-    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-      if (!shelf.has(bot.cellX + dx + ',' + (bot.cellY + dy))) continue;
-      const cx = X(bot.cellX + dx) + size.cell / 2, cy = Y(bot.cellY + dy) + size.cell / 2;
-      g.globalAlpha = 1 - k;
-      g.strokeStyle = '#fff';
-      g.lineWidth = 2;
-      g.beginPath();
-      g.arc(cx, cy, size.cell * (.3 + k * .5), 0, 7);
-      g.stroke();
-      g.globalAlpha = 1;
-      return;
-    }
-  }
-
-  function loadArrow(bot, k, colour) {
-    const y = bot.y - size.cell * (.6 + k * .8);
-    g.globalAlpha = 1 - k * .6;
-    g.fillStyle = colour;
-    g.beginPath();
-    g.moveTo(bot.x, y - size.cell * .4);
-    g.lineTo(bot.x - size.cell * .3, y);
-    g.lineTo(bot.x + size.cell * .3, y);
-    g.closePath();
-    g.fill();
-    g.globalAlpha = 1;
   }
 
   function footer(index, frameA, bots) {
     const seat = state.seat, trucks = frameA.p[seat][4];
     let home = 0;
     for (let t = 0; t < trucks.length / 3; t++) if (trucks[t * 3 + 2] < PARKED) home++;
-    const busy = bots.filter(b => b.action).length;
+    const busy = bots.filter(b => b.event !== 'wait').length;
     let picking = 0, out = 0;
     for (const order of Object.values(data.orders)) {
       const s = statusAt(order, index);
@@ -295,8 +217,7 @@ export async function createPanels({ game, play, you }) {
   // ---- per frame ----------------------------------------------------------------
   function update(index, k, frameA, head, time) {
     if (state.open) {
-      if (!size.w || canvas.clientWidth !== size.w) sizeCanvas();
-      const bots = drawShop(index, k, frameA, time), key = index + ':' + state.seat;
+      const bots = drawShop(index, k, time), key = index + ':' + state.seat;
       if (key !== state.footKey) { state.footKey = key; footer(index, frameA, bots); }
     }
     if (state.order && Math.floor(head * 4) !== state.cardTick) { state.cardTick = Math.floor(head * 4); drawOrder(head); }

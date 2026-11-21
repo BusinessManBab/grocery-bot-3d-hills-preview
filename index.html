@@ -13,7 +13,7 @@
 <link rel="stylesheet" href="static/game.css">
 <link rel="stylesheet" href="static/game-view.css">
 <link rel="stylesheet" href="static/view-toggle.css">
-<link rel="stylesheet" href="static/panels.css?v=10">
+<link rel="stylesheet" href="static/panels.css?v=11">
 <script src="static/grocery-bot.js"></script>
 <script type="importmap">
 { "imports": {
@@ -21,7 +21,7 @@
   "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
 } }
 </script>
-<script type="module" src="src/game-view.js?v=10"></script>
+<script type="module" src="src/game-view.js?v=11"></script>
 </head>
 <body class="game-page">
 <canvas class="g-map" id="terrain" aria-hidden="true"></canvas>
@@ -70,7 +70,7 @@
     <h2 id="shop-title">Your shop</h2>
     <button class="g-x" id="shop-close" type="button" aria-label="Close the shop view">×</button>
   </header>
-  <canvas id="shop-canvas" role="img" aria-label="Robots picking orders and loading trucks inside the shop"></canvas>
+  <svg class="g-shop-svg" id="shop-svg" role="img" aria-label="Robots picking orders and loading trucks inside the shop"></svg>
   <p class="g-shop-foot" id="shop-foot"></p>
 </section>
 <section class="g-order" id="ordercard" hidden aria-live="polite"></section>
