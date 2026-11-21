@@ -21,3 +21,6 @@ body.is-3d #terrain { visibility: hidden; }
   .g-hint { display: none; }
 }
 .g-3d[hidden] { display: none; }
+@media (max-width: 760px) {
+  .g-credit { top: 112px; }
+}

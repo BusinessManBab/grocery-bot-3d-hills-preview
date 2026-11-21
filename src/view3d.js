@@ -330,7 +330,7 @@ export async function createWorld3d(opts) {
     const mats = { frame: lit('#583a2d'), wall: lit('#fff3da'), paint: lit(player.colour), glass: lit('#b6d4d7'), door: lit('#65493a'),
       sign: new THREE.MeshLambertMaterial({ map: signTexture }), post: lit('#583a2d') };
     const g = new THREE.Group();
-    const w = 62, h = 30, d = 40, front = d / 2;
+    const w = 62, h = 30, d = 34, front = d / 2;
     g.add(box(w, 1.6, d + 2, mats.frame, 0, .8, 0));                        // plinth
     g.add(box(w - 3, h, d - 3, mats.wall, 0, h / 2, 0));                    // cream walls
     for (const sx of [-1, 1]) for (const sz of [-1, 1]) g.add(box(2.4, h, 2.4, mats.frame, sx * (w / 2 - 1.2), h / 2, sz * (d / 2 - 1.2)));
@@ -339,12 +339,12 @@ export async function createWorld3d(opts) {
     g.add(box(w - 6, .8, d - 6, mats.frame, 0, h + 6.4, 0));
     // striped awning across the front, 8 tiles alternating player colour and cream
     for (let i = 0; i < 8; i++) {
-      const tile = box(w / 8 + .05, 1, 9, i % 2 ? mats.wall : mats.paint, -w / 2 + w / 16 + i * w / 8, h - 6, front + 4);
-      tile.rotation.x = .42;
+      const tile = box(w / 8 + .05, .9, 7, i % 2 ? mats.wall : mats.paint, -w / 2 + w / 16 + i * w / 8, h - 1.4, front + 3);
+      tile.rotation.x = .5;
       g.add(tile);
     }
-    g.add(box(w * .34, h * .4, .8, mats.glass, -w * .2, h * .37, front - 1));  // shop window
-    g.add(box(w * .2, h * .58, .8, mats.door, w * .22, h * .29, front - 1));   // door
+    g.add(box(w * .34, h * .42, .8, mats.glass, -w * .2, h * .4, front - 1));  // shop window
+    g.add(box(w * .2, h * .62, .8, mats.door, w * .22, h * .31 + 1.6, front - 1));   // door
     // GROCERY BOT sign on two posts, like the 2D sign floating above the roof
     const sign = new THREE.Mesh(new THREE.BoxGeometry(46, 15.3, 1.4), [mats.paint, mats.paint, mats.paint, mats.paint, mats.sign, mats.sign]);
     sign.position.set(0, h + 16, front - 6);
@@ -478,7 +478,7 @@ export async function createWorld3d(opts) {
   }
 
   // ---- per-player actors ---------------------------------------------------------
-  const TRUCK_SCALE = .42, SHOP_SCALE = 1.25;
+  const TRUCK_SCALE = .9, SHOP_SCALE = 2.4;
   const players = game.players.map(player => {
     const shop = buildShop(player);
     shop.group.position.set(player.shop[0], 0, player.shop[1]);
@@ -622,7 +622,7 @@ export async function createWorld3d(opts) {
     controls.target.z = clamp(controls.target.z, Z0, Z1);
     const distance = camera.position.distanceTo(controls.target);
     // Like the 2D sprites, actors grow more slowly than the map when you zoom in.
-    const grow = clamp(Math.sqrt(distance / fitDistance), .32, 1.25);
+    const grow = clamp(Math.sqrt(distance / fitDistance), .2, 1.25);
 
     // sun follows the view so the shadow map stays sharp where you look
     const reach = clamp(distance * 1.1, 260, 2600);
@@ -647,12 +647,13 @@ export async function createWorld3d(opts) {
       const was = states.get(house);
       if (!was || was.status === OPEN) states.set(house, { status: order.status, owner, dim });
     }
+    const pinH = 24 / size.h * 2 * Math.tan(camera.fov * Math.PI / 360);  // a 24 px pin at any screen size
     for (const house of homes) {
       const s = states.get(house);
       paintHome(house, s);
       if (s) {
         house.pin.position.set(house.x, house.top + 6 + Math.sin(time * 2.4 + house.i) * 1.5, house.z);
-        house.pin.scale.set(.026, .039, 1);
+        house.pin.scale.set(pinH * 2 / 3, pinH, 1);
       }
     }
 
