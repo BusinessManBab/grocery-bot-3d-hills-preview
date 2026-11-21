@@ -20,6 +20,15 @@ contains. Nothing in the page code is specific to Kongsberg: everything town-spe
 Agreed but not built yet: see "Planned changes".
 
 **Updates:**
+- **2026-11-21, shop window:**
+  - clicking a player in the Standings opens their shop window;
+  - the shop window's trucks are each player's own trucks, the same as on the map;
+  - the shop is laid out like a real store: dairy and drinks fridges at the back, pantry and
+    breakfast shelves in the middle, the bakery and fruit and vegetable bins by the door, with
+    department signs;
+  - a new match was recorded with that layout.
+
+  Details under "Shop window and order card" and "Planned changes" 2–4 (now done).
 - **2026-11-21, cartoon buildings:** every building, order homes included, is styled from its OSM
   type:
   - houses get steep pitched roofs (gabled or hipped) with thick eaves, a chimney, a front door
@@ -193,8 +202,11 @@ Things to check (see the next section for what to change):
 - [ ] River streaks run downstream, and the sea or lakes have none
 - [ ] Place labels are in the right spots
 - [ ] Phone width: the 2D/3D switch does not cover anything important
-- [ ] The shop window opens on "Your shop", switches when you click another shop, closes with ×
-      and comes back when you click a shop
+- [ ] The shop window opens on "Your shop", switches when you click another shop or a standings
+      row, closes with × and comes back when you click a shop or a row
+- [ ] The shop window's trucks look like that player's trucks on the map
+- [ ] Shop departments make sense: milk only in the dairy fridges, fruit and vegetables only in
+      the bins, bread on the bakery rack, each under its sign
 - [ ] In the shop window, robots carry and load items, trucks back in and drive off, and truck
       tags fill up as the replay plays
 - [ ] Roads cross rivers on raised bridges with railings, and the road surface shows on the deck
@@ -224,13 +236,22 @@ gh2 api -X POST repos/BusinessManBab/grocery-bot-T-3d/pages -f 'source[branch]=m
   animation**, Erik's isometric store from `public/static/arena.js` on `main`, ported to
   `src/shop-iso.js`. It is driven by the recorded match instead of the homepage's canned replay,
   so it shows what is really happening in that shop at that tick:
-  - **The store:** the same floor, walls, red bay markings and Grocery Bot sign, with fridges
-    (dairy, juice), produce bins, bread racks and shelves. The v1 departments are gone because
-    the v2 shop mixes products, so each shelf gets the fixture of its product.
+  - **The store:** the same floor, walls, red bay markings and Grocery Bot sign, laid out like a
+    real grocery store, with red department signs as on the v1 homepage:
+    - **at the back** (far from the robots' door): dairy fridges (milk, yogurt, cream, butter,
+      cheese, eggs) and a drinks fridge (juice);
+    - **in the middle aisle:** pantry (pasta, rice, sugar) and breakfast (cereal, oats) shelves;
+    - **by the door:** the bakery rack (bread, flour), and fruit (apples, bananas, tomatoes) and
+      vegetable (carrots, onions, peppers, lettuce) bins.
+
+    Fixtures and signs come from the shop layout (`shop.json` → `departments`, `fixtures`). See
+    "A realistic shop" under "Planned changes".
   - **The robots:** Grocery Bots in the player's own look (shape, colour, eyes). They walk tile to
     tile, look the way they last moved, hop when they pick, carry what they picked in their basket,
     and cheer when they load it into a truck.
-  - **The trucks:** the v1 trucks in the player's colour. Each backs into its bay when it comes
+  - **The trucks:** each player's **own trucks, exactly as on the map**. The side of each truck
+    is the same `looks.js` truck art the 2D and 3D map trucks use (carriage, cab, visor, decal,
+    colour), with roof faces in the look's colours. Each backs into its bay when it comes
     home, with hazard lights, and drives off with its door closing when it leaves. The tag above it
     has one square per queued item, filled as robots load it (`+N` past 10 items), and the loaded
     goods show inside the cargo box.
@@ -238,8 +259,9 @@ gh2 api -X POST repos/BusinessManBab/grocery-bot-T-3d/pages -f 'source[branch]=m
   - **The standings** shrink to fit above the window (`--shop-h`).
 - **Its title:** "Your shop" for the viewer's own seat (`meta.you` in `game.json`), otherwise
   "<name>'s shop".
-- **Switching and closing:** clicking any shop on the map, in 2D or 3D, switches the window to
-  that shop. × closes it, and clicking any shop brings it back.
+- **Switching and closing:** clicking any shop on the map (2D or 3D), or **any player in the
+  Standings**, switches the window to that shop. A standings click also focuses that player's
+  fleet, as before. × closes the window, and clicking any shop or standings row brings it back.
 - **Order card (left):** clicking a house with an order opens it. It shows the order number and
   street address, its status (open; claimed and being picked, loaded or ready; on the way;
   delivered; expired), the items, when it was ordered and how long ago (game clock, like the
@@ -279,6 +301,9 @@ option yet.
 - `shop.json`:
   - the floor: `grid {width, height, walls}`; `items [[x, y, product index]]` (shelf cells);
     `bays [[x, y]]`; `loadCells`; `spawn`; `products`
+  - the departments: `departments [{name, x, y, fixture}]` (one per shelf block, at its first
+    cell) and `fixtures {"x,y": fridge|shelf|bin|rack}`. Both are optional; without them the
+    window guesses a fixture from each product.
   - the rules the card uses: `botsPerPlayer`, `trucksPerPlayer`, `tickSeconds`, `lateStepTicks`,
     `lateStepPercent`
   - the binary layout: `seats`, `ticks`, `frameBytes`
@@ -309,41 +334,37 @@ preview yet. Each lists what it should do, how to build it, and how to check it.
 
 Built on 2026-11-21 as the cartoon buildings; see "Cartoon buildings" below.
 
-### 2. The shop window uses the same trucks that drive on the map
+### 2. The shop window uses the same trucks that drive on the map: done
 
-**Goal:** the trucks parked at the bays in the shop window are the player's own trucks, with the
-same carriage, cab, visor, decal and colour as that player's trucks on the 2D and 3D map (from
-`looks.js`). Not the generic v1 truck.
+Built on 2026-11-21. In `src/shop-iso.js`, `truckMarkup` draws the player's side-view truck art
+(`truckArt(look)` from `looks.js`, the art the map trucks use) on the visible side of the isometric
+truck with an affine transform:
+- svg x −74 (rear) … 70 (cab) runs along the truck, u = 0 … −3.1 cells;
+- svg y 38 is the ground;
+- height scales by 0.344.
 
-**How:**
-- In `src/shop-iso.js`, draw the player's side-view truck art (`truckArt(look)` from `looks.js`,
-  the same art the map uses) on the visible side of the isometric truck with an affine transform:
-  - svg x −74 (rear) … 70 (cab) runs along the truck's length, u = 0 … −3.1 cells;
-  - svg y 38 is the ground;
-  - height scales by about 0.344, so the 90-unit-tall art matches the v1 truck's 31-unit cargo box.
-- Add roof faces in the look's colours (shell, canvas cloth or flatbed wood; the cab in the
-  player's colour).
-- Keep the parts that show what is loaded: the rolling rear door, the goods inside, and the order
-  tag above the truck.
-- When the window switches shop, it switches truck look too (`setPlayer`).
+Roof faces get the look's colours: the shell white, canvas cloth or flatbed wood, and the cab in
+the player's colour. The rolling rear door, the loaded goods and the order tag are kept.
+`setPlayer` switches the art when the window switches shop. Checked against the map for every
+look: plum canvas with dots, yellow cooler with the nose cab, black flatbed with roof lights, and
+so on.
 
-**Check:** for each of the five looks, the docked trucks in the shop window match the trucks
-driving that player's routes on the map.
+### 3. Clicking a player in the standings opens their shop window: done
 
-### 3. Clicking a player in the standings opens their shop window
+Built on 2026-11-21. The standings row click in `src/game-view.js` focuses the fleet as before
+and calls `panels.showShop(player.seat)`. The window switches to that player ("Your shop" on your
+own row) and reopens if it was closed. Checked for all five rows.
 
-**Goal:** clicking a player's row in **Standings** also shows that player's shop in the bottom
-right ("Your shop" for your own row, "<name>'s shop" otherwise). It reopens the window if it was
-closed. It works the same in 2D and 3D, and on phones.
+### 4. A realistic shop: groceries where they belong: done in the preview
 
-**How:** in `src/game-view.js`, the standings row click already focuses that player's fleet
-(`play.focus`). It should also call `panels.showShop(player.seat)`. Clicking the same row again
-clears the fleet focus as today, but leaves the shop window on that player. Use × to close it.
+Built in the preview on 2026-11-21: `tools/simulate_match.py` replaces the engine's `make_shop`
+with `realistic_shop`, which deals the products by the `LAYOUT` table below. A new match was then
+recorded, so the robots really fetch milk from the dairy fridges; Rush AI still wins, with 5,738
+points. The shop window draws the departments' fixtures and red signs from `shop.json`. The live
+game itself still uses round-robin shelves, and changing it there still needs the approval
+described below.
 
-**Check:** clicking each row switches the shop window and its title. Clicking a shop on the map,
-and the status link in the order card, still work.
-
-### 4. A realistic shop: groceries where they belong
+The original proposal follows.
 
 **Goal:** the shop floor should look and work like a real grocery store. Products of a kind
 belong together in departments with the right fixtures: milk and dairy in the fridges at the
@@ -367,14 +388,16 @@ milk from the bread rack.
 |---|---|---|---|
 | x 3, upper | Dairy | fridge | milk, milk, yogurt |
 | x 3, lower | Dairy | fridge | cream, butter |
-| x 7, upper | Cheese, eggs and juice | fridge | cheese, eggs, juice |
-| x 7, lower | Breakfast | shelf | cereal, oats |
-| x 11, upper | Pantry | shelf | pasta, rice, pasta |
-| x 11, lower | Baking | shelf | flour, sugar |
-| x 15, upper | Vegetables | bin | lettuce, tomatoes, peppers |
-| x 15, lower | Bakery | rack | bread, bread |
-| x 19, upper | Fruit | bin | apples, bananas, bananas |
-| x 19, lower | Vegetables | bin | carrots, onions |
+| x 7, upper | Dairy | fridge | cheese, eggs, milk |
+| x 7, lower | Drinks | fridge | juice, juice |
+| x 11, upper | Pantry | shelf | pasta, rice, sugar |
+| x 11, lower | Breakfast | shelf | cereal, oats |
+| x 15, upper | Bakery | rack | bread, bread, flour |
+| x 15, lower | Vegetables | bin | carrots, onions |
+| x 19, upper | Fruit | bin | apples, bananas, tomatoes |
+| x 19, lower | Vegetables | bin | peppers, lettuce |
+
+(As built; it differs a little from the first proposal so drinks get their own fridge.)
 
 Dairy is at the back, far from the entrance, as in real stores. Fruit, vegetables and bread are
 next to it.
