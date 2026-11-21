@@ -228,6 +228,7 @@ export async function createPanels({ game, play, you }) {
     if (!data.orders[id]) return;
     state.order = id;
     state.lastCard = '';
+    state.cardTick = -1;
     card.hidden = false;
   }
 
@@ -237,13 +238,15 @@ export async function createPanels({ game, play, you }) {
   }
 
   const clockText = seconds => { const m = Math.floor(seconds / 60); return `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`; };
-  const minutes = seconds => seconds < 60 ? 'under a minute' : `${Math.round(seconds / 60)} min`;
+  // One tick is (dayEnd - clockStart) / ticks seconds of the day shown in the HUD clock.
+  const dayAt = tick => game.meta.clockStart + (game.meta.dayEnd - game.meta.clockStart) * tick / game.meta.ticks;
+  const span = ticks => { const m = Math.round(Math.max(0, ticks) * (game.meta.dayEnd - game.meta.clockStart) / game.meta.ticks / 60); return m < 1 ? 'under a minute' : m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`; };
   const escape = text => String(text).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
   function drawOrder(head) {
-    const order = data.orders[state.order], tick = Math.floor(head), ts = data.tickSeconds, start = game.meta.clockStart;
+    const order = data.orders[state.order], tick = Math.floor(head), ts = data.tickSeconds;
     const s = statusAt(order, tick), owner = game.players[s.seat];
-    const nowSec = head * ts, placedSec = order.placed * ts;
+    const nowSec = head * ts;     // engine seconds: lateness is measured in these
     // happiness: final when delivered; else how late it is against the deadline (5% per 2.5 min late)
     let happy = 100, mood = '';
     if (s.status === 'delivered') happy = order.satisfaction ?? 100;
@@ -260,11 +263,11 @@ export async function createPanels({ game, play, you }) {
     } else if (s.status === 'delivering') detail = `On the way in a ${owner?.name ?? ''} truck`;
     else if (s.status === 'delivered') detail = `Delivered by ${owner?.name ?? 'a shop'}`;
     let timing;
-    if (s.status === 'delivered') timing = `Took ${minutes(order.deliveredAt * ts - placedSec)} from order to doorstep`;
-    else if (s.status === 'open') timing = `Expires in ${minutes(Math.max(0, order.expires * ts - nowSec))} if no shop claims it`;
+    if (s.status === 'delivered') timing = `Took ${span(order.deliveredAt - order.placed)} from order to doorstep`;
+    else if (s.status === 'open') timing = `Expires in ${span(order.expires - head)} if no shop claims it`;
     else if (order.deadline != null && s.status !== 'expired' && s.status !== 'undelivered') {
-      const left = order.deadline * ts - nowSec;
-      timing = left >= 0 ? `Due ${clockText(start + order.deadline * ts)}, in ${minutes(left)}` : `${minutes(-left)} late (was due ${clockText(start + order.deadline * ts)})`;
+      const left = order.deadline - head;
+      timing = left >= 0 ? `Due ${clockText(dayAt(order.deadline))}, in ${span(left)}` : `${span(-left)} late (was due ${clockText(dayAt(order.deadline))})`;
     } else timing = '';
     const counts = {};
     for (const item of order.items) counts[item] = (counts[item] || 0) + 1;
@@ -276,7 +279,7 @@ export async function createPanels({ game, play, you }) {
       <p class="g-order-status" style="--seat:${owner ? owner.colour : '#735536'}">${owner ? `<button type="button" class="g-order-shop" data-seat="${s.seat}">${escape(detail)}</button>` : escape(detail)}</p>
       <h3>${order.items.length} item${order.items.length === 1 ? '' : 's'}</h3><ul class="g-order-items">${items}</ul>
       <dl>
-        <div><dt>Ordered</dt><dd>${clockText(start + placedSec)}, ${minutes(Math.max(0, nowSec - placedSec))} ago</dd></div>
+        <div><dt>Ordered</dt><dd>${clockText(dayAt(order.placed))}, ${span(head - order.placed)} ago</dd></div>
         ${timing ? `<div><dt>Time</dt><dd>${escape(timing)}</dd></div>` : ''}
         <div><dt>Customer</dt><dd><span class="g-happy"><b style="width:${happy}%;background:${happy >= 95 ? '#3f8f4f' : happy >= 70 ? '#e8a32e' : '#c8102e'}"></b></span> ${happy}% · ${mood}</dd></div>
         <div><dt>Points</dt><dd>${escape(points)}</dd></div>
@@ -290,14 +293,13 @@ export async function createPanels({ game, play, you }) {
   }
 
   // ---- per frame ----------------------------------------------------------------
-  let cardTick = -1;
   function update(index, k, frameA, head, time) {
     if (state.open) {
       if (!size.w || canvas.clientWidth !== size.w) sizeCanvas();
-      const bots = drawShop(index, k, frameA, time);
-      if (index !== state.footTick) { state.footTick = index; footer(index, frameA, bots); }
+      const bots = drawShop(index, k, frameA, time), key = index + ':' + state.seat;
+      if (key !== state.footKey) { state.footKey = key; footer(index, frameA, bots); }
     }
-    if (state.order && Math.floor(head * 4) !== cardTick) { cardTick = Math.floor(head * 4); drawOrder(head); }
+    if (state.order && Math.floor(head * 4) !== state.cardTick) { state.cardTick = Math.floor(head * 4); drawOrder(head); }
   }
 
   if (state.seat !== null) showShop(state.seat);
