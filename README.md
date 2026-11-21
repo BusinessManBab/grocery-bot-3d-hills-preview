@@ -1,9 +1,11 @@
-# Grocery Bot 3D map preview
+# Grocery Bot 3D map preview: hills
 
-Preview of a 3D mode for the Grocery Bot v2 game map (`/game/CODE`), next to the live 2D map. Switch with the 2D / 3D buttons (or the V key, or `?view=3d`).
+Copy of [grocery-bot-3d-preview](https://github.com/BusinessManBab/grocery-bot-3d-preview) (kept as is, tag `v1-flat`) with:
 
-- 2D view: the live page's code (`prototypes/town-rush/game-view.js` on `codex/town-rush-launch-fixes`), reading a stored replay instead of the API.
-- 3D view: `src/view3d.js` (three.js). Same map bounds, colours, shops, trucks and orders. Order homes are the real OpenStreetMap building at each address, coloured by who claimed the order.
-- Replay: a finished 5-player ranked game; player names are replaced with bot names.
+- Real terrain: the 3D map is draped over an elevation grid of Kongsberg (`data/terrain.bin`, 307 × 451 samples every ~9 m, 123–352 m, relief ×1.25). Roads, buildings, trees, shops, trucks (pitched on slopes) and trails follow the ground; the board edge shows the hills in section.
+- No trees on or next to water.
+- The river flows: streaks drift downstream along each river (direction from a distance-to-outlet field over the water areas), faster where the river drops.
 
-Map data © OpenStreetMap contributors (ODbL).
+Switch views with the 2D / 3D buttons (or V, or `?view=3d`).
+
+Elevation: Mapzen Terrarium tiles (AWS Open Data). Map data © OpenStreetMap contributors (ODbL).

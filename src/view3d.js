@@ -1,6 +1,7 @@
 // 3D view of the game map. Same town data, borders, colours and replay frames as the 2D canvas
-// in game-view.js: flat map layers keep their 2D colours (unlit), while shops, trucks and houses
-// are lit models. Order homes are the real OpenStreetMap footprints at each customer address.
+// in game-view.js, on the real terrain: the map is draped over an elevation grid of Kongsberg
+// (data/terrain.bin) and everything stands on it. Order homes are the real OpenStreetMap
+// footprints at each customer address.
 import * as THREE from 'three';
 import { MapControls } from 'three/addons/controls/MapControls.js';
 import { SVGLoader } from 'three/addons/loaders/SVGLoader.js';
@@ -9,6 +10,7 @@ import { COLORS, HEADS, INK as TRUCK_INK, SHELL, EDGE, WOOD, LAMP, mix, light, f
 
 const M = 1 / 1.113;              // world units per metre (one unit is 1e-5 degree of latitude)
 const LIFT = 1.3;                 // buildings a little taller than life so the town reads from above
+const RELIEF = 1.25;              // hills a little steeper than life, so the valley reads at a tilt
 const PALETTE = {
   ground: '#f0e9d8', side: '#e2d6bb', base: '#cfc1a2', green: '#c9d8ac', water: '#86b8c5',
   lane: '#ded4bd', streetCase: '#d0c4aa', majorCase: '#bca989', street: '#ffffff', major: '#fff7e5',
@@ -21,7 +23,11 @@ const ease = t => t < .5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
 export async function createWorld3d(opts) {
   const { host, overlay: ctx, view, town, game, play, wx, wy, truckAt, labels } = opts;
   const { OPEN, DELIVERED, PARKED, TRAIL, POP_TICKS, INK } = opts.constants;
-  const extra = await fetch('data/buildings.json').then(res => res.json());
+  const [extra, relief, heights] = await Promise.all([
+    fetch('data/buildings.json').then(res => res.json()),
+    fetch('data/terrain.json').then(res => res.json()),
+    fetch('data/terrain.bin').then(res => res.arrayBuffer()).then(buf => new Uint16Array(buf)),
+  ]);
 
   // ---- renderer, scene, camera ------------------------------------------------
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
@@ -49,23 +55,65 @@ export async function createWorld3d(opts) {
   const X0 = wx(b0), X1 = wx(b2), Z0 = wy(b3), Z1 = wy(b1);
   const W = X1 - X0, D = Z1 - Z0, CX = (X0 + X1) / 2, CZ = (Z0 + Z1) / 2;
 
+  // ---- terrain: elevation grid over exactly these bounds (row 0 north, column 0 west) ----
+  const { cols, rows } = relief;
+  const gridY = i => heights[i] / 10 * M * RELIEF;     // units above the lowest point on the map
+  function heightAt(x, z) {
+    const fx = clamp((x - X0) / W, 0, 1) * (cols - 1), fz = clamp((z - Z0) / D, 0, 1) * (rows - 1);
+    const c = Math.min(cols - 2, Math.floor(fx)), r = Math.min(rows - 2, Math.floor(fz)), u = fx - c, v = fz - r, i = r * cols + c;
+    return (gridY(i) * (1 - u) + gridY(i + 1) * u) * (1 - v) + (gridY(i + cols) * (1 - u) + gridY(i + cols + 1) * u) * v;
+  }
+  const PEAK = (relief.top - relief.base) * M * RELIEF;
+
   const flat = (colour, order, extraOpts = {}) => new THREE.MeshBasicMaterial({ color: colour, depthWrite: false, side: THREE.DoubleSide, ...extraOpts });
+  // Draped layers sit on the terrain: no depth writes, pulled towards the camera so they win over it.
+  const draped = (colour, extraOpts = {}) => new THREE.MeshLambertMaterial({ color: colour, depthWrite: false, side: THREE.DoubleSide,
+    polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4, ...extraOpts });
   const lit = colour => new THREE.MeshLambertMaterial({ color: colour });
   const litBoth = colour => new THREE.MeshLambertMaterial({ color: colour, side: THREE.DoubleSide });
 
-  // Slab under the map so the borders read as the edge of the board.
-  const SLAB = 26;
-  const slab = new THREE.Mesh(new THREE.BoxGeometry(W, SLAB, D), [lit(PALETTE.side), lit(PALETTE.side), lit(PALETTE.ground), lit(PALETTE.base), lit(PALETTE.side), lit(PALETTE.side)]);
-  slab.position.set(CX, -SLAB / 2 - .5, CZ);
-  slab.receiveShadow = true;
-  scene.add(slab);
-
-  // Ground: the 2D map's paper, green areas and water, painted once into a texture.
+  // Ground: the 2D map's paper, green areas and water, painted into a texture and draped over the
+  // elevation grid. Lit, so the hills shade themselves; flat ground keeps its 2D colour.
   const tex = groundTexture();
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(W, D).rotateX(-Math.PI / 2), flat('#ffffff', 0, { map: tex }));
+  const groundGeo = new THREE.PlaneGeometry(W, D, cols - 1, rows - 1).rotateX(-Math.PI / 2);
+  const gp = groundGeo.attributes.position;
+  for (let i = 0; i < gp.count; i++) gp.setY(i, gridY(i));
+  groundGeo.computeVertexNormals();
+  const ground = new THREE.Mesh(groundGeo, new THREE.MeshLambertMaterial({ map: tex }));
   ground.position.set(CX, 0, CZ);
+  ground.receiveShadow = true;
   ground.renderOrder = 1;
   scene.add(ground);
+
+  // The board's edge: a skirt from the terrain's edge down to a level base, so the hills read in section.
+  const SLAB = 26;
+  {
+    const pos = [], edge = [];
+    for (let c = 0; c < cols; c++) edge.push([c, 0]);
+    for (let r = 1; r < rows; r++) edge.push([cols - 1, r]);
+    for (let c = cols - 2; c >= 0; c--) edge.push([c, rows - 1]);
+    for (let r = rows - 2; r >= 0; r--) edge.push([0, r]);
+    const at = ([c, r]) => [X0 + c / (cols - 1) * W, gridY(r * cols + c), Z0 + r / (rows - 1) * D];
+    for (let i = 0; i < edge.length; i++) {
+      const [ax, ay, az] = at(edge[i]), [bx, by, bz] = at(edge[(i + 1) % edge.length]);
+      pos.push(ax, ay, az, bx, by, bz, bx, -SLAB, bz, ax, ay, az, bx, -SLAB, bz, ax, -SLAB, az);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.computeVertexNormals();
+    const skirt = new THREE.Mesh(geo, litBoth(PALETTE.side));
+    skirt.receiveShadow = true;
+    scene.add(skirt);
+    const base = new THREE.Mesh(new THREE.PlaneGeometry(W, D).rotateX(Math.PI / 2), lit(PALETTE.base));
+    base.position.set(CX, -SLAB, CZ);
+    scene.add(base);
+  }
+
+  function area(list) {
+    const path = new Path2D();
+    for (const p of list) { path.moveTo(wx(p[0]), wy(p[1])); for (let i = 2; i < p.length; i += 2) path.lineTo(wx(p[i]), wy(p[i + 1])); path.closePath(); }
+    return path;
+  }
 
   function groundTexture() {
     const longSide = Math.min(4096, renderer.capabilities.maxTextureSize);
@@ -77,7 +125,6 @@ export async function createWorld3d(opts) {
     g.fillStyle = PALETTE.ground;
     g.fillRect(0, 0, canvas.width, canvas.height);
     g.setTransform(k, 0, 0, k, -X0 * k, -Z0 * k);
-    const area = list => { const path = new Path2D(); for (const p of list) { path.moveTo(wx(p[0]), wy(p[1])); for (let i = 2; i < p.length; i += 2) path.lineTo(wx(p[i]), wy(p[i + 1])); path.closePath(); } return path; };
     g.fillStyle = PALETTE.green;
     g.fill(area(town.green));
     g.fillStyle = PALETTE.water;
@@ -94,19 +141,21 @@ export async function createWorld3d(opts) {
     ['street', 5, PALETTE.street], ['major', 8.2, PALETTE.major],
   ];
   roadLayers.forEach(([kind, half, colour], i) => {
-    const mesh = new THREE.Mesh(ribbons(town.roads[kind], half), flat(colour));
-    mesh.position.y = 0.05;
+    const mesh = new THREE.Mesh(ribbons(town.roads[kind], half, .5 + i * .05), draped(colour));
+    mesh.receiveShadow = true;
     mesh.renderOrder = 2 + i;
     scene.add(mesh);
   });
 
-  function ribbons(lines, half) {
-    const pos = [];
+  // Ribbons cut into short pieces so they follow the ground instead of bridging dips.
+  function ribbons(lines, half, lift, pos = []) {
+    const y = (x, z) => heightAt(x, z) + lift;
     const disc = (x, z) => {
-      const n = 10;
+      const n = 10, cy = y(x, z);
       for (let i = 0; i < n; i++) {
         const a = i / n * Math.PI * 2, b = (i + 1) / n * Math.PI * 2;
-        pos.push(x, 0, z, x + Math.cos(b) * half, 0, z + Math.sin(b) * half, x + Math.cos(a) * half, 0, z + Math.sin(a) * half);
+        const ax = x + Math.cos(a) * half, az = z + Math.sin(a) * half, bx = x + Math.cos(b) * half, bz = z + Math.sin(b) * half;
+        pos.push(x, cy, z, bx, y(bx, bz), bz, ax, y(ax, az), az);
       }
     };
     for (const line of lines) {
@@ -114,43 +163,50 @@ export async function createWorld3d(opts) {
       disc(px, pz);
       for (let i = 2; i < line.length; i += 2) {
         const x = wx(line[i]), z = wy(line[i + 1]);
-        const dx = x - px, dz = z - pz, len = Math.hypot(dx, dz) || 1;
-        const nx = -dz / len * half, nz = dx / len * half;
-        pos.push(px + nx, 0, pz + nz, x + nx, 0, z + nz, x - nx, 0, z - nz, px + nx, 0, pz + nz, x - nx, 0, z - nz, px - nx, 0, pz - nz);
+        strip(pos, px, pz, x, z, half, y);
         disc(x, z);
         px = x; pz = z;
       }
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.computeVertexNormals();
     return geo;
   }
 
-  // Shadows land on an invisible layer above the flat map, so the map keeps its 2D colours.
-  const shadowCatcher = new THREE.Mesh(new THREE.PlaneGeometry(W, D).rotateX(-Math.PI / 2), new THREE.ShadowMaterial({ opacity: .16, depthWrite: false }));
-  shadowCatcher.position.set(CX, .3, CZ);
-  shadowCatcher.receiveShadow = true;
-  shadowCatcher.renderOrder = 8;
-  scene.add(shadowCatcher);
+  // One straight piece of ribbon from (ax, az) to (bx, bz), split every ~6 units; returns the piece count.
+  function strip(pos, ax, az, bx, bz, half, y) {
+    const dx = bx - ax, dz = bz - az, len = Math.hypot(dx, dz) || 1, n = Math.max(1, Math.ceil(len / 6));
+    const nx = -dz / len * half, nz = dx / len * half;
+    for (let s = 0; s < n; s++) {
+      const x0 = ax + dx * s / n, z0 = az + dz * s / n, x1 = ax + dx * (s + 1) / n, z1 = az + dz * (s + 1) / n;
+      const p = [x0 + nx, z0 + nz], q = [x1 + nx, z1 + nz], r = [x1 - nx, z1 - nz], t = [x0 - nx, z0 - nz];
+      for (const [x, z] of [p, q, r, p, r, t]) pos.push(x, y(x, z), z);
+    }
+    return n;
+  }
 
   // ---- buildings ------------------------------------------------------------------
   // Footprint ring in 1e5-degree ints -> extruded prism (walls + flat roof), as non-indexed triangles.
+  // On a slope the walls start below the lowest corner and the roof sits above the highest one.
   function prism(ring, height, out) {
     const pts = [];
     for (let i = 0; i < ring.length; i += 2) pts.push(new THREE.Vector2(wx(ring[i]), wy(ring[i + 1])));
     if (THREE.ShapeUtils.isClockWise(pts)) pts.reverse();
+    let lo = Infinity, hi = -Infinity;
+    for (const p of pts) { const h = heightAt(p.x, p.y); lo = Math.min(lo, h); hi = Math.max(hi, h); }
+    const foot = lo - 1.5, top = hi + height;
     const walls = [], roof = [];
     for (let i = 0; i < pts.length; i++) {
       const a = pts[i], b = pts[(i + 1) % pts.length];
-      // Counter-clockwise in (x, z) means the outward side is on the right when viewed from +y.
-      walls.push(a.x, 0, a.y, a.x, height, a.y, b.x, height, b.y, a.x, 0, a.y, b.x, height, b.y, b.x, 0, b.y);
+      walls.push(a.x, foot, a.y, a.x, top, a.y, b.x, top, b.y, a.x, foot, a.y, b.x, top, b.y, b.x, foot, b.y);
     }
     for (const [i, j, k] of THREE.ShapeUtils.triangulateShape(pts, [])) {
-      for (const n of [i, k, j]) roof.push(pts[n].x, height, pts[n].y);
+      for (const n of [i, k, j]) roof.push(pts[n].x, top, pts[n].y);
     }
     out.walls.push(...walls);
     out.roof.push(...roof);
-    return pts;
+    return { pts, top };
   }
 
   function prismGeometry(parts, withGroups) {
@@ -187,7 +243,7 @@ export async function createWorld3d(opts) {
   const homes = extra.homes.map((home, i) => {
     const parts = { walls: [], roof: [] };
     const height = Math.max(7, home.h) * M * LIFT;
-    const pts = prism(home.ring, height, parts);
+    const { pts, top } = prism(home.ring, height, parts);
     const wall = litBoth(PALETTE.homeWall), roof = litBoth(PALETTE.home);
     const mesh = new THREE.Mesh(prismGeometry(parts, true), [wall, roof]);
     mesh.castShadow = mesh.receiveShadow = true;
@@ -197,8 +253,11 @@ export async function createWorld3d(opts) {
     for (const p of pts) { cx += p.x; cz += p.y; }
     cx /= pts.length; cz /= pts.length;
     for (const p of pts) r = Math.max(r, Math.hypot(p.x - cx, p.y - cz));
-    const ring = new THREE.Mesh(new THREE.CircleGeometry(r + 9, 40).rotateX(-Math.PI / 2), flat('#ffffff', 0, { transparent: true, opacity: .55 }));
-    ring.position.set(cx, .2, cz);
+    // ground glow draped over the slope around the house
+    const ringGeo = new THREE.RingGeometry(.01, r + 9, 40, 4).rotateX(-Math.PI / 2).translate(cx, 0, cz);
+    const rp = ringGeo.attributes.position;
+    for (let v = 0; v < rp.count; v++) rp.setY(v, heightAt(rp.getX(v), rp.getZ(v)) + .9);
+    const ring = new THREE.Mesh(ringGeo, flat('#ffffff', 0, { transparent: true, opacity: .55, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8 }));
     ring.renderOrder = 9;
     ring.visible = false;
     scene.add(ring);
@@ -207,7 +266,7 @@ export async function createWorld3d(opts) {
     pin.renderOrder = 50;
     pin.visible = false;
     scene.add(pin);
-    return { i, key: `${home.p[0]},${home.p[1]}`, mesh, wall, roof, ring, pin, x: cx, z: cz, top: height, state: '' };
+    return { i, key: `${home.p[0]},${home.p[1]}`, mesh, wall, roof, ring, pin, x: cx, z: cz, top, state: '' };
   });
   const homeAt = new Map(homes.map(h => [h.key, h]));
 
@@ -258,6 +317,130 @@ export async function createWorld3d(opts) {
     home.pin.visible = true;
   }
 
+  // ---- water: the 2D water areas as a grid, and which way each river runs --------------
+  // Each connected stretch of water flows to its outlet: the lowest cell on the map's edge if it
+  // reaches the edge, else its lowest cell. A breadth-first distance from the outlet, followed
+  // downhill and smoothed, gives a direction everywhere on the water, tributaries included.
+  const WC = 6, wcols = Math.ceil(W / WC), wrows = Math.ceil(D / WC);
+  const water = new Uint8Array(wcols * wrows);
+  {
+    const c = document.createElement('canvas');
+    c.width = wcols; c.height = wrows;
+    const g = c.getContext('2d', { willReadFrequently: true });
+    g.setTransform(1 / WC, 0, 0, 1 / WC, -X0 / WC, -Z0 / WC);
+    g.fillStyle = '#000';
+    g.fill(area(town.water));
+    const px = g.getImageData(0, 0, wcols, wrows).data;
+    for (let i = 0; i < water.length; i++) water[i] = px[i * 4 + 3] > 127 ? 1 : 0;
+  }
+  const cellOf = (x, z) => {
+    const c = Math.floor((x - X0) / WC), r = Math.floor((z - Z0) / WC);
+    return c < 0 || r < 0 || c >= wcols || r >= wrows ? -1 : r * wcols + c;
+  };
+  const isWater = (x, z) => { const i = cellOf(x, z); return i >= 0 && water[i] === 1; };
+  const cellX = i => X0 + (i % wcols + .5) * WC, cellZ = i => Z0 + (Math.floor(i / wcols) + .5) * WC;
+  const flowX = new Float32Array(water.length), flowZ = new Float32Array(water.length), flowSpeed = new Float32Array(water.length);
+  const flowing = [];                       // cells of rivers big enough to show a current
+  {
+    const label = new Int32Array(water.length).fill(-1), dist = new Float32Array(water.length).fill(Infinity);
+    const N4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    const around = (i, fn) => {
+      const c = i % wcols, r = (i - c) / wcols;
+      for (const [dc, dr] of N4) { const cc = c + dc, rr = r + dr; if (cc >= 0 && rr >= 0 && cc < wcols && rr < wrows) fn(rr * wcols + cc); }
+    };
+    let comp = 0;
+    for (let start = 0; start < water.length; start++) {
+      if (!water[start] || label[start] >= 0) continue;
+      const cells = [start];
+      label[start] = comp;
+      for (let h = 0; h < cells.length; h++) around(cells[h], j => { if (water[j] && label[j] < 0) { label[j] = comp; cells.push(j); } });
+      comp++;
+      if (cells.length < 120) continue;     // ponds stay still
+      const edge = cells.filter(i => { const c = i % wcols, r = (i - c) / wcols; return c === 0 || r === 0 || c === wcols - 1 || r === wrows - 1; });
+      const pool = edge.length ? edge : cells;
+      let low = Infinity;
+      for (const i of pool) low = Math.min(low, heightAt(cellX(i), cellZ(i)));
+      const queue = pool.filter(i => heightAt(cellX(i), cellZ(i)) < low + 1.5);
+      for (const i of queue) dist[i] = 0;
+      for (let h = 0; h < queue.length; h++) around(queue[h], j => { if (label[j] === label[queue[h]] && dist[j] === Infinity) { dist[j] = dist[queue[h]] + 1; queue.push(j); } });
+      for (const i of cells) {
+        if (dist[i] === Infinity) continue;
+        const d = j => (j >= 0 && water[j] && dist[j] < Infinity ? dist[j] : dist[i]);
+        const c = i % wcols;
+        flowX[i] = d(c > 0 ? i - 1 : -1) - d(c < wcols - 1 ? i + 1 : -1);
+        flowZ[i] = d(i - wcols) - d(i + wcols < water.length ? i + wcols : -1);
+        flowing.push(i);
+      }
+    }
+    // smooth the directions so the current bends with the banks instead of zig-zagging
+    for (let pass = 0; pass < 4; pass++) {
+      const sx = new Float32Array(flowX), sz = new Float32Array(flowZ);
+      for (const i of flowing) {
+        let ax = 0, az = 0;
+        const c = i % wcols, r = (i - c) / wcols;
+        for (let dr = -2; dr <= 2; dr++) for (let dc = -2; dc <= 2; dc++) {
+          const cc = c + dc, rr = r + dr;
+          if (cc < 0 || rr < 0 || cc >= wcols || rr >= wrows) continue;
+          const j = rr * wcols + cc;
+          if (water[j]) { ax += sx[j]; az += sz[j]; }
+        }
+        flowX[i] = ax; flowZ[i] = az;
+      }
+    }
+    for (const i of flowing) {
+      const len = Math.hypot(flowX[i], flowZ[i]) || 1;
+      flowX[i] /= len; flowZ[i] /= len;
+      // faster where the river drops (rapids and Nybrufossen), from the slope along the current
+      const x = cellX(i), z = cellZ(i), drop = (heightAt(x - flowX[i] * 12, z - flowZ[i] * 12) - heightAt(x + flowX[i] * 12, z + flowZ[i] * 12)) / 24;
+      flowSpeed[i] = clamp(1 + drop * 22, 1, 4);
+    }
+  }
+
+  // Current: short streaks drifting downstream, bright at the head and fading to the tail.
+  const STREAKS = Math.min(900, Math.round(flowing.length / 9));
+  const streaks = Array.from({ length: STREAKS }, () => ({ x: 0, z: 0, age: 0, life: 1 }));
+  let seedW = 11;
+  const randW = () => (seedW = (seedW * 16807) % 2147483647) / 2147483647;
+  const respawn = (p, spread = false) => {
+    const i = flowing[Math.floor(randW() * flowing.length)];
+    p.x = cellX(i) + (randW() - .5) * WC; p.z = cellZ(i) + (randW() - .5) * WC;
+    p.life = 1.6 + randW() * 2.4;
+    p.age = spread ? randW() * p.life : 0;
+  };
+  for (const p of streaks) respawn(p, true);
+  const streakGeo = new THREE.BufferGeometry();
+  const streakPos = new Float32Array(STREAKS * 6 * 3), streakCol = new Float32Array(STREAKS * 6 * 4);
+  streakGeo.setAttribute('position', new THREE.BufferAttribute(streakPos, 3));
+  streakGeo.setAttribute('color', new THREE.BufferAttribute(streakCol, 4));
+  const streakMesh = new THREE.Mesh(streakGeo, new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -6 }));
+  streakMesh.renderOrder = 8;
+  streakMesh.frustumCulled = false;
+  if (STREAKS) scene.add(streakMesh);
+
+  function flowWater(dt, scale) {
+    let v = 0, q = 0;
+    const put = (x, y, z, a) => { streakPos.set([x, y, z], v * 3); streakCol.set([.93, .97, .98, a], v * 4); v++; };
+    for (const p of streaks) {
+      p.age += dt;
+      let i = cellOf(p.x, p.z);
+      if (p.age > p.life || i < 0 || !water[i] || !flowSpeed[i]) { respawn(p); i = cellOf(p.x, p.z); }
+      const speed = 13 * flowSpeed[i];
+      p.x += flowX[i] * speed * dt;
+      p.z += flowZ[i] * speed * dt;
+      const len = (7 + speed * .7) * scale, half = (.7 + flowSpeed[i] * .25) * scale;
+      const fx = flowX[i], fz = flowZ[i], nx = -fz * half, nz = fx * half;
+      const tx = p.x - fx * len, tz = p.z - fz * len, a = Math.sin(Math.PI * clamp(p.age / p.life, 0, 1)) * (.45 + flowSpeed[i] * .12);
+      const hy = heightAt(p.x, p.z) + 1.1, ty = heightAt(tx, tz) + 1.1;
+      // a thin tapered dash: two triangles, head at full alpha, tail transparent
+      put(p.x + nx, hy, p.z + nz, a); put(p.x - nx, hy, p.z - nz, a); put(tx, ty, tz, 0);
+      put(p.x + nx * .4 + fx * half * 1.5, hy, p.z + nz * .4 + fz * half * 1.5, a); put(p.x + nx, hy, p.z + nz, a); put(p.x - nx, hy, p.z - nz, a);
+      q++;
+    }
+    streakGeo.attributes.position.needsUpdate = true;
+    streakGeo.attributes.color.needsUpdate = true;
+  }
+
   // ---- trees in the parks and woods (decoration, seeded so every visit looks the same) ----
   {
     let seed = 7;
@@ -273,6 +456,7 @@ export async function createWorld3d(opts) {
     for (let tries = 0; tries < 60000 && spots.length < 1800; tries++) {
       const x = X0 + rand() * W, z = Z0 + rand() * D;
       if (blocked(x, z)) continue;
+      if (isWater(x, z) || isWater(x + 9, z) || isWater(x - 9, z) || isWater(x, z + 9) || isWater(x, z - 9)) continue;
       if (!polys.some(p => x >= p.box[0] && x <= p.box[2] && z >= p.box[1] && z <= p.box[3] && inside([x, z], p.pts))) continue;
       spots.push([x, z, .7 + rand() * .7, rand()]);
     }
@@ -283,7 +467,7 @@ export async function createWorld3d(opts) {
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), shades = ['#9dbb7c', '#8db06f', '#a9c48a', '#7fa565'].map(c => new THREE.Color(c));
     spots.forEach(([x, z, s, r], i) => {
       q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), r * 6.28);
-      m.compose(new THREE.Vector3(x, 0, z), q, new THREE.Vector3(s, s, s));
+      m.compose(new THREE.Vector3(x, heightAt(x, z) - .5, z), q, new THREE.Vector3(s, s, s));
       trunks.setMatrixAt(i, m);
       crowns.setMatrixAt(i, m);
       crowns.setColorAt(i, shades[i % shades.length]);
@@ -339,6 +523,7 @@ export async function createWorld3d(opts) {
     const g = new THREE.Group();
     const w = 62, h = 34, d = 34, front = d / 2;
     g.add(box(w, 1.6, d + 2, mats.frame, 0, .8, 0));                        // plinth
+    g.add(box(w - .4, 30, d + 1.6, mats.frame, 0, -15, 0));                 // footing down the slope
     g.add(box(w - 3, h, d - 3, mats.wall, 0, h / 2, 0));                    // cream walls
     for (const sx of [-1, 1]) for (const sz of [-1, 1]) g.add(box(2.4, h, 2.4, mats.frame, sx * (w / 2 - 1.2), h / 2, sz * (d / 2 - 1.2)));
     g.add(box(w + 1, 6, d + 1, mats.paint, 0, h + 3, 0));                   // colour band (the 2D top stripe)
@@ -479,6 +664,7 @@ export async function createWorld3d(opts) {
     // stand the model on the ground, centred on the 2D sprite's anchor
     g.position.set(-2, 38, 0);
     const holder = new THREE.Group();
+    holder.rotation.order = 'YZX';            // heading about y, then nose up/down the slope
     holder.add(g);
     holder.traverse(o => { if (o.isMesh) o.renderOrder = 31; });
     return { group: holder, mats: [...mats.values(), faceMat] };
@@ -547,7 +733,7 @@ export async function createWorld3d(opts) {
 
   function pose(target, distance, polar, azimuth) {
     const sin = Math.sin(polar);
-    camera.position.set(target.x + distance * sin * Math.sin(azimuth), distance * Math.cos(polar), target.z + distance * sin * Math.cos(azimuth));
+    camera.position.set(target.x + distance * sin * Math.sin(azimuth), target.y + distance * Math.cos(polar), target.z + distance * sin * Math.cos(azimuth));
     controls.target.copy(target);
     camera.lookAt(target);
   }
@@ -566,14 +752,15 @@ export async function createWorld3d(opts) {
 
   function home() {
     const r = region();
-    return { target: new THREE.Vector3((r.x0 + r.x1) / 2, 0, (r.z0 + r.z1) / 2), distance: fitDistance, polar: TILT, azimuth: 0 };
+    const x = (r.x0 + r.x1) / 2, z = (r.z0 + r.z1) / 2;
+    return { target: new THREE.Vector3(x, heightAt(x, z), z), distance: fitDistance, polar: TILT, azimuth: 0 };
   }
 
   // 2D <-> 3D hand-over: keep the same spot and zoom when switching views.
   function fromFlat() {
     const p = pads(), cx = p.l + (view.w - p.l - p.r) / 2, cy = p.t + (view.h - p.t - p.b) / 2;
     const x = (cx - view.x) / view.scale, z = (cy - view.y) / view.scale, ratio = view.scale / view.fit;
-    return { target: new THREE.Vector3(x, 0, z), distance: clamp(fitDistance / ratio, controls.minDistance, controls.maxDistance), azimuth: 0 };
+    return { target: new THREE.Vector3(x, heightAt(x, z), z), distance: clamp(fitDistance / ratio, controls.minDistance, controls.maxDistance), azimuth: 0 };
   }
 
   function toFlat() {
@@ -627,10 +814,17 @@ export async function createWorld3d(opts) {
     }
     controls.target.x = clamp(controls.target.x, X0, X1);
     controls.target.z = clamp(controls.target.z, Z0, Z1);
+    if (!flight) {
+      // the point you orbit rides on the ground, so panning over a hill does not dive into it
+      const dy = (heightAt(controls.target.x, controls.target.z) - controls.target.y) * Math.min(1, dt * 5);
+      controls.target.y += dy;
+      camera.position.y += dy;
+    }
+    camera.position.y = Math.max(camera.position.y, heightAt(camera.position.x, camera.position.z) + 12);
     const distance = camera.position.distanceTo(controls.target);
     // Like the 2D sprites, actors grow more slowly than the map when you zoom in. Measured per
     // object, so a truck close to a low camera does not fill the screen.
-    const growAt = (x, z) => clamp((camera.position.distanceTo(tmp.set(x, 0, z)) / fitDistance) ** .65, .16, 1.25);
+    const growAt = (x, z) => clamp((camera.position.distanceTo(tmp.set(x, heightAt(x, z), z)) / fitDistance) ** .65, .16, 1.25);
 
     // sun follows the view so the shadow map stays sharp where you look
     const reach = clamp(distance * 1.1, 260, 2600);
@@ -675,6 +869,12 @@ export async function createWorld3d(opts) {
       }
       actor.grow = growAt(player.shop[0], player.shop[1]);
       actor.shop.group.scale.setScalar(SHOP_SCALE * actor.grow);
+      {
+        // stand on the highest corner; the footing covers the downhill side
+        const sx = player.shop[0], sz = player.shop[1], hw = 31 * SHOP_SCALE * actor.grow, hd = 18 * SHOP_SCALE * actor.grow;
+        actor.base = Math.max(heightAt(sx, sz), heightAt(sx - hw, sz - hd), heightAt(sx + hw, sz - hd), heightAt(sx - hw, sz + hd), heightAt(sx + hw, sz + hd));
+        actor.shop.group.position.y = actor.base;
+      }
       let parked = 0;
       const colour = new THREE.Color(player.colour);
       actor.trucks.forEach((truck, t) => {
@@ -689,8 +889,10 @@ export async function createWorld3d(opts) {
         }
         const grow = growAt(now.x, now.y);
         truck.obj.visible = true;
-        truck.obj.position.set(now.x, Math.abs(Math.sin(time * 9 + t * 2 + player.seat)) * .6 * grow, now.y);
-        truck.obj.rotation.y = truck.heading ?? 0;
+        const heading = truck.heading ?? 0, reach = 144 * TRUCK_SCALE * grow * .45, hx = Math.cos(heading) * reach, hz = -Math.sin(heading) * reach;
+        const front = heightAt(now.x + hx, now.y + hz), back = heightAt(now.x - hx, now.y - hz);
+        truck.obj.position.set(now.x, (front + back) / 2 + Math.abs(Math.sin(time * 9 + t * 2 + player.seat)) * .6 * grow, now.y);
+        truck.obj.rotation.set(0, heading, Math.atan2(front - back, reach * 2));
         truck.obj.scale.setScalar(TRUCK_SCALE * grow);
         // trail behind the truck, as in drawTrails()
         let px = now.x, pz = now.y;
@@ -700,9 +902,8 @@ export async function createWorld3d(opts) {
           const x = wx(list[i]), z = wy(list[i + 1]), len = Math.hypot(x - px, z - pz);
           const alpha = (dim < 1 ? .12 : .55) * (1 - (back + k) / TRAIL);
           if (len > .01) {
-            const w = 3.4 * grow, nx = -(z - pz) / len * w, nz = (x - px) / len * w;
-            trail.pos.push(px + nx, .4, pz + nz, x + nx, .4, z + nz, x - nx, .4, z - nz, px + nx, .4, pz + nz, x - nx, .4, z - nz, px - nx, .4, pz - nz);
-            for (let v = 0; v < 6; v++) trail.col.push(colour.r, colour.g, colour.b, alpha);
+            const pieces = strip(trail.pos, px, pz, x, z, 3.4 * grow, (vx, vz) => heightAt(vx, vz) + 1);
+            for (let v = 0; v < pieces * 6; v++) trail.col.push(colour.r, colour.g, colour.b, alpha);
           }
           px = x; pz = z;
         }
@@ -711,6 +912,7 @@ export async function createWorld3d(opts) {
     }
     trailGeo.setAttribute('position', new THREE.Float32BufferAttribute(trail.pos, 3));
     trailGeo.setAttribute('color', new THREE.Float32BufferAttribute(trail.col, 4));
+    if (STREAKS) flowWater(dt, clamp((distance / fitDistance) ** .6, .35, 1.5));
 
     renderer.render(scene, camera);
 
@@ -730,7 +932,7 @@ export async function createWorld3d(opts) {
     ctx.textBaseline = 'middle';
     for (const [name, lon, lat, minZoom, kind] of labels) {
       if (zoom < minZoom) continue;
-      const at = project(wx(lon), 1, wy(lat));
+      const at = project(wx(lon), heightAt(wx(lon), wy(lat)) + 2, wy(lat));
       if (!at || at.x < 0 || at.y < 0 || at.x > size.w || at.y > size.h) continue;
       ctx.font = kind === 'river' ? 'italic 700 13px Georgia, serif' : '700 12px system-ui, sans-serif';
       const half = ctx.measureText(name).width / 2 + 6;
@@ -746,7 +948,7 @@ export async function createWorld3d(opts) {
 
   function drawPill(actor, grow) {
     const { player } = actor;
-    const at = project(player.shop[0], 0, player.shop[1] + 26 * SHOP_SCALE * grow);
+    const at = project(player.shop[0], actor.base ?? 0, player.shop[1] + 26 * SHOP_SCALE * grow);
     if (!at) return;
     ctx.globalAlpha = actor.dim;
     ctx.font = '800 12px Mulish, Arial, sans-serif';

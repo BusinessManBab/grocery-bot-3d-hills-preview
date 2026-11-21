@@ -488,7 +488,7 @@ const host3d = $('world3d');
 async function setMode(next) {
   if (next === '3d' && !world3d) {
     $('view-3d').setAttribute('aria-busy', 'true');
-    loading3d ||= import('./view3d.js?v=5').then(m => m.createWorld3d({
+    loading3d ||= import('./view3d.js?v=6').then(m => m.createWorld3d({
       host: host3d, overlay: ctx, view, town, game, play, wx, wy, truckAt, shopSign, labels: MAP_LABELS,
       constants: { OPEN, CLAIMED, DELIVERED, MISSED, PARKED, TRAIL, POP_TICKS, INK },
     }));
@@ -514,7 +514,7 @@ addEventListener('keydown', event => {
   if (event.target.closest?.('input, textarea')) return;
   if (event.key === 'v' || event.key === 'V') setMode(mode === '3d' ? '2d' : '3d');
 });
-window.groceryView = { setMode, play, game, get world3d() { return world3d; } };
+window.groceryView = { setMode, play, game, toWorld: (lon, lat) => [wx(lon), wy(lat)], get world3d() { return world3d; } };
 
 async function start() {
   document.querySelector('.g-mark').innerHTML = botSvg(DEFAULT_LOOK);
