@@ -1,7 +1,8 @@
 # Making the 2D/3D hills map for another town
 
 This repo shows one Grocery Bot game on the Kongsberg map, in 2D (the live game page) and 3D
-(real terrain, real buildings, a flowing river). Nothing in the page code is specific to
+(real terrain, real buildings, a flowing river). It also has a shop window, which shows the robots
+inside a shop, and an order card, which shows what a clicked order contains. Nothing in the page code is specific to
 Kongsberg: everything town-specific lives in `data/`. To do another town, you swap in that town's
 data files and publish a copy of the repo.
 
@@ -19,6 +20,7 @@ yet, because there is no Oslo replay (see step 2).
 | `game.json` | One finished game played **on that same map** | The game server's `/api/games/CODE?since=0` (step 2) |
 | `buildings.json` | OSM building footprints, with each delivery home matched to its real building | `tools/build_city.py buildings` |
 | `terrain.bin` + `terrain.json` | Elevation grid over the map bounds | `tools/build_city.py terrain` |
+| `shop.json` + `shop.bin` | Inside the shops: robot positions, what they carry, truck loading; every order's items, address and timeline. Optional: without them the page simply has no shop window or order card | The full engine replay of the same game (see "Shop window and order card") |
 
 Everything else (`index.html`, `src/`, `static/`, `assets/`) stays as it is.
 
@@ -143,6 +145,9 @@ Things to check (see the next section for what to change):
 - [ ] River streaks run downstream, and the sea or lakes have none
 - [ ] Place labels are in the right spots
 - [ ] Phone width: the 2D/3D switch does not cover anything important
+- [ ] The shop window opens on "Your shop", switches when you click another shop, closes with ×
+      and comes back when you click a shop
+- [ ] Clicking an order house opens the order card with the right items, times and happiness
 
 ### 7. Publish
 
@@ -155,6 +160,75 @@ gh2 api -X POST repos/BusinessManBab/grocery-bot-T-3d/pages -f 'source[branch]=m
 ```
 
 ---
+
+## Shop window and order card
+
+**What players see:**
+- **Shop window (bottom right):** opens when the map loads. It shows the robots inside a shop in
+  that player's colours: picking items from the shelves (a white ring flashes on the shelf),
+  carrying up to 3 items (coloured dots), and loading them into the trucks at the bays (an arrow
+  into the bay). A small bar under each docked truck shows how much of its orders is loaded.
+  Trucks out on the road show as an empty "out" bay. The footer counts working robots, orders
+  being packed, and trucks home or out.
+- **Its title:** "Your shop" for the viewer's own seat (`meta.you` in `game.json`), otherwise
+  "<name>'s shop".
+- **Switching and closing:** clicking any shop on the map, in 2D or 3D, switches the window to
+  that shop. × closes it, and clicking any shop brings it back.
+- **Order card (left):** clicking a house with an order opens it. It shows the order number and
+  street address, its status (open; claimed and being picked, loaded or ready; on the way;
+  delivered; expired), the items, when it was ordered and how long ago (game clock, like the
+  HUD), when it is due or how late it is, the customer's happiness (100% on time, 5% off per
+  late step, as the engine scores it) and the points.
+- **Card details:** the status line links to that shop's window. The clicked house is
+  highlighted (a ring in 2D, a bigger pin and a pulsing glow in 3D). Esc or × closes the card.
+
+**Where the data comes from:**
+
+The public feed (`/api/games/CODE`) only has truck positions, scores and order status, so the
+panels need the **full engine replay** of the same game. `tools/simulate_match.py` plays a whole
+match with the real engine and writes `game.json`, `shop.json` and `shop.bin` together, so all
+three match:
+
+```sh
+# ENGINE_DIR: prototypes/town-rush of a grocery-bot checkout (codex/town-rush-launch-fixes matches live)
+python3 tools/simulate_match.py /path/to/grocery-bot/prototypes/town-rush /path/to/rush-ai data 7
+```
+
+That is how this preview was made: your `rush-ai` bot (in-process, the same code the CLI runs)
+against two reference and two starter bots, seed 7, about 30 seconds of CPU. To change the line-up,
+names or looks, edit `SEATS` and `LOOKS` at the top of the script.
+
+For a real game instead of a simulated one, `shop.json` and `shop.bin` can be built from that
+game's full replay (`/api/rooms/CODE/replay`, format `grocerybot-replay-v1`). It holds every
+player's view per tick, including the robots. On 2026-11-21 that endpoint answered 500 on the live
+site for the ranked game I tried, which is why this preview uses a simulated match.
+
+**For another town:** the engine on `codex/town-rush-launch-fixes` only knows Kongsberg. For
+another town, run the script against a branch whose engine can load that town (the multi-town
+layout), and pass the town's map to `create_match(map_data=...)`. The script does not take a town
+option yet.
+
+**Formats** (also documented at the top of `tools/simulate_match.py`):
+
+- `shop.json`:
+  - the floor: `grid {width, height, walls}`; `items [[x, y, product index]]` (shelf cells);
+    `bays [[x, y]]`; `loadCells`; `spawn`; `products`
+  - the rules the card uses: `botsPerPlayer`, `trucksPerPlayer`, `tickSeconds`, `lateStepTicks`,
+    `lateStepPercent`
+  - the binary layout: `seats`, `ticks`, `frameBytes`
+  - `orders {id: {items, address, placed, expires, deadline, firstLoad, ready, deliveredAt,
+    satisfaction, points, reward, rushBonus, history [[tick, status, seat]]}}`
+- `shop.bin`: for each tick (0 = before the first move), for each seat in feed order, the robots
+  as `[x, y, action (0 wait, 1 move, 2 pick, 3 load), item1, item2, item3]` (item = product index
+  + 1, 0 = empty), then the trucks as `[items loaded, items needed]` for the orders queued on
+  that truck. 130 bytes per seat per tick with 20 robots and 5 trucks, about 390 kB for 5 seats
+  and 600 ticks.
+
+**For the live game page:** the same panels need the server to send this data. The smallest change
+is a second feed next to `/api/games/CODE` (e.g. `/api/games/CODE/shops?since=N`) carrying these
+frames and the order details, plus `meta.you` from the signed-in account. During a live game it
+should only show what rivals can already see, or only start once the game is over, because
+showing rivals' robots, claims and items live would leak strategy.
 
 ## Settings you may want to change per town
 

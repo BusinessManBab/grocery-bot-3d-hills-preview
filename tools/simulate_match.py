@@ -1,12 +1,13 @@
 """Play a 5-seat Town Rush match with the real engine and export what the preview needs.
 
-    python3 simulate_match.py ENGINE_DIR RUSH_AI_DIR OUT_DIR [seed]
+    python3 tools/simulate_match.py ENGINE_DIR RUSH_AI_DIR OUT_DIR [seed]
 
 ENGINE_DIR: prototypes/town-rush of a checkout (codex/town-rush-launch-fixes matches live).
 Seats: the user's rush-ai (in-process, same interface as the CLI), two ReferenceBots and two
 StarterBots. Outputs:
   game.json   the public feed (engine.feed.from_replay, exactly what /api/games serves) + looks
   shop.json   the shop floor layout, rules, and every order's items/address/timeline
+  (game.json also gets meta.you, the seat whose shop opens as "Your shop")
   shop.bin    per tick, per seat: 20 robots x [x, y, action, item1, item2, item3] and
               5 trucks x [items loaded, items needed] for the orders queued on that truck
 """
@@ -85,6 +86,7 @@ while not state['finished']:
 feed = from_replay(recorder.data).since(0)
 for player in feed['meta']['players']:
     player['look'] = {**LOOKS[player['name']], 'name': 'Grocery Bot'}
+feed['meta']['you'] = next(i for i, (_, name, _) in enumerate(SEATS) if name == 'Rush AI')   # whose shop opens as "Your shop"
 os.makedirs(OUT, exist_ok=True)
 with open(os.path.join(OUT, 'game.json'), 'w') as f:
     json.dump(feed, f, separators=(',', ':'))
