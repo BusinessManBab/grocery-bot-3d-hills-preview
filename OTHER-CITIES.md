@@ -723,3 +723,13 @@ the browser console, `groceryView.world3d.flowAt(x, z)` returns `[dx, dz, speed]
   on the page.
 - Elevation: Mapzen Terrarium tiles on AWS Open Data.
 - Delivery homes, shops and the replay: the Grocery Bot game data for that town.
+
+
+## Landmarks and fast loading (all towns)
+
+Every town gets 2-4 of its real-life trademarks modelled so they stand out (Kongsberg: Nybrufossen with the river, Kongsberg kirke, the Mining Museum). Method:
+
+1. Find candidates: OSM features with a `wikidata` tag inside the map bounds (Overpass `nwr[wikidata][!highway][!place](S,W,N,E)`), plus web sources for shape, colours and materials. Model only what you can verify.
+2. List them in `tools/landmarks.spec.json`: `id`, `name`, `model`, `at: [lon, lat]`, and an outline source (`osm: "w…"/"r…"`, many famous buildings are relations the plain data leaves out, or `building: true` for the background building at `at`). Run `node tools/bake_landmarks.mjs` (writes `data/landmarks.json` and the explore menu `data/places.json`; background buildings inside an outline are replaced).
+3. Models live in `MODELS` in `src/landmarks.js`: generic `church`, `outline`, `rapids` (river white water, falls, boulders), Oslo's hand models, and each town's own signature shapes. Everything is merged into one mesh per material (a handful of draw calls); moving water is a texture offset, never per-frame geometry. Keep details at least 25 cm off any surface behind them (coplanar faces flicker).
+4. Bake buildings (`tools/bake_buildings.mjs`) and trees (`tools/bake_trees.cjs`), check on a GPU machine: load time, fps, each landmark from two angles.
